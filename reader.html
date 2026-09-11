@@ -16,6 +16,8 @@
     --text: #e8e8ec;
     --text-dim: #8b8d98;
     --accent: #ff5a7a;
+    --brand-orange: #f59e0b;
+    --tg-blue: #29a9eb;
   }
 
   *{ box-sizing: border-box; }
@@ -83,7 +85,86 @@
     border-radius: 20px;
   }
 
-  /* ---------- Ad slot ---------- */
+  /* ---------- Header ---------- */
+  .site-header{
+    display:flex;
+    align-items:center;
+    padding: 16px;
+    border-bottom: 1px solid var(--line);
+  }
+  .site-header a{
+    display:flex;
+    align-items:center;
+    gap:8px;
+    text-decoration:none;
+    color: var(--brand-orange);
+    font-size: 1.15rem;
+    font-weight: 700;
+  }
+
+  /* ---------- Back-to-channel button ---------- */
+  .back-button-wrap{
+    padding: 24px 16px 8px;
+    text-align:center;
+  }
+  .back-button{
+    display:inline-block;
+    width:100%;
+    max-width: 400px;
+    padding: 14px 20px;
+    background: var(--brand-orange);
+    color: #15161a;
+    font-weight: 700;
+    font-size: 0.95rem;
+    text-decoration:none;
+    border-radius: 10px;
+  }
+
+  /* ---------- Footer follow-links ---------- */
+  .follow-section{
+    padding: 28px 16px 8px;
+  }
+  .follow-section h3{
+    display:flex;
+    align-items:center;
+    gap:8px;
+    color: var(--brand-orange);
+    font-size: 0.85rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    margin: 0 0 14px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--line);
+  }
+  .follow-card{
+    display:flex;
+    align-items:center;
+    gap: 12px;
+    background: var(--bg-raised);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 14px;
+    margin-bottom: 10px;
+    text-decoration:none;
+    color: var(--text);
+  }
+  .follow-icon{
+    flex-shrink:0;
+    width: 42px; height: 42px;
+    border-radius: 10px;
+    background: var(--tg-blue);
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    font-size: 1.1rem;
+  }
+  .follow-icon.x{ background:#000; border:1px solid var(--line); }
+  .follow-text{ flex:1; min-width:0; }
+  .follow-text .name{ font-weight:700; font-size:0.95rem; }
+  .follow-text .desc{ font-size:0.8rem; color: var(--text-dim); margin-top:2px; }
+  .follow-arrow{ color: var(--text-dim); font-size:1.1rem; flex-shrink:0; }
+
+
   .ad-slot{
     margin: 22px auto;
     padding: 14px 0;
@@ -175,6 +256,8 @@
 </head>
 <body>
 
+<div id="siteHeader"></div>
+
 <div class="wrap" id="wrap">
   <div class="state" id="loadingState">
     <div class="spinner"></div>
@@ -184,6 +267,8 @@
 
 <script>
 (function(){
+
+  let siteConfig = null; // fetched once, reused for header + footer
 
   // Ad slot markup — reused for every placement (title, every 9 pages, end)
   function adSlotHTML(){
@@ -201,12 +286,65 @@
     return code ? code.trim() : null;
   }
 
+  // Header logo — editable from the dashboard (text + link). Renders
+  // even while the comic itself is loading/erroring, so it always
+  // sits above whatever state is currently in #wrap.
+  function renderHeader(cfg){
+    const el = document.getElementById('siteHeader');
+    if (!cfg || !cfg.header_logo_text){
+      el.innerHTML = '';
+      return;
+    }
+    const url = cfg.header_logo_url || '#';
+    el.innerHTML =
+      '<div class="site-header">' +
+        '<a href="' + escapeAttr(url) + '">' + escapeHTML(cfg.header_logo_text) + '</a>' +
+      '</div>';
+  }
+
+  function backButtonHTML(cfg){
+    if (!cfg || !cfg.back_button_url) return '';
+    const text = cfg.back_button_text || 'Back';
+    return (
+      '<div class="back-button-wrap">' +
+        '<a class="back-button" href="' + escapeAttr(cfg.back_button_url) + '">' + escapeHTML(text) + '</a>' +
+      '</div>'
+    );
+  }
+
+  // Follow-links footer — mirrors the main site's "Follow Us Links"
+  // card style (icon circle + name + description + arrow), editable
+  // from the dashboard as a repeatable list.
+  function followFooterHTML(cfg){
+    const links = (cfg && Array.isArray(cfg.follow_links)) ? cfg.follow_links : [];
+    if (!links.length) return '';
+
+    let html = '<div class="follow-section"><h3>⚡ Follow For More</h3>';
+    links.forEach(function(link){
+      const platform = (link.platform || '').toLowerCase();
+      const isX = platform === 'twitter' || platform === 'x';
+      const icon = isX ? '𝕏' : '✈️';
+      html +=
+        '<a class="follow-card" href="' + escapeAttr(link.url || '#') + '">' +
+          '<div class="follow-icon' + (isX ? ' x' : '') + '">' + icon + '</div>' +
+          '<div class="follow-text">' +
+            '<div class="name">' + escapeHTML(link.name || '') + '</div>' +
+            '<div class="desc">' + escapeHTML(link.desc || '') + '</div>' +
+          '</div>' +
+          '<div class="follow-arrow">↗</div>' +
+        '</a>';
+    });
+    html += '</div>';
+    return html;
+  }
+
   function renderNotAvailable(reason){
     document.getElementById('wrap').innerHTML =
       '<div class="state">' +
         '<h2>Not available yet</h2>' +
         '<p>' + reason + '</p>' +
-      '</div>';
+      '</div>' +
+      followFooterHTML(siteConfig);
   }
 
   function renderComic(data){
@@ -266,6 +404,12 @@
     html += adSlotHTML();
     html += '<div class="end-note">End of comic</div>';
 
+    // Back-to-channel button, then the follow-links footer — both
+    // editable from the dashboard, both optional (skip cleanly if
+    // site-config.json is missing/unconfigured).
+    html += backButtonHTML(siteConfig);
+    html += followFooterHTML(siteConfig);
+
     wrap.innerHTML = html;
   }
 
@@ -278,7 +422,21 @@
     return String(str).replace(/"/g, '&quot;');
   }
 
+  async function loadSiteConfig(){
+    try{
+      const res = await fetch('site-config.json', { cache: 'no-store' });
+      if (res.ok) siteConfig = await res.json();
+    } catch(err){
+      // Branding is optional — a missing/unreachable site-config.json
+      // should never block the comic itself from rendering.
+      siteConfig = null;
+    }
+    renderHeader(siteConfig);
+  }
+
   async function init(){
+    await loadSiteConfig();
+
     const code = getCodeFromURL();
     if (!code){
       renderNotAvailable('No comic code was provided in the link.');
