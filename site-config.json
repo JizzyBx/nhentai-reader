@@ -1,0 +1,14 @@
+{
+  "header_logo_text": "✨ Arc Comic",
+  "header_logo_url": "https://t.me/ArcComic",
+  "back_button_text": "⬅ Back to Arc Comic",
+  "back_button_url": "https://t.me/ArcComic",
+  "follow_links": [
+    {
+      "platform": "telegram",
+      "name": "Arc Comic",
+      "desc": "doujinshi Comics, Top Rated Comics, Review updates",
+      "url": "https://t.me/ArcComic"
+    }
+  ]
+}
