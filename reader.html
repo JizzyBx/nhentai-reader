@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Reader</title>
+
+<!-- Mondiad banner ad script -->
+<script async src="https://ss.mrmnd.com/banner.js"></script>
+
+<style>
+  :root{
+    --bg: #15161a;
+    --bg-raised: #1d1f26;
+    --line: #2a2d36;
+    --text: #e8e8ec;
+    --text-dim: #8b8d98;
+    --accent: #ff5a7a;
+  }
+
+  *{ box-sizing: border-box; }
+
+  html, body{
+    margin:0;
+    padding:0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+
+  .wrap{
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 0 0 48px;
+  }
+
+  /* ---------- Title block ---------- */
+  .title-block{
+    padding: 28px 16px 20px;
+    border-bottom: 1px solid var(--line);
+  }
+  .title-block h1{
+    font-size: 1.35rem;
+    line-height: 1.35;
+    margin: 0 0 10px;
+    font-weight: 600;
+  }
+  .meta-row{
+    display:flex;
+    gap: 10px 14px;
+    flex-wrap: wrap;
+    font-size: 0.85rem;
+    color: var(--text-dim);
+    margin-bottom: 10px;
+  }
+  .meta-row span{
+    display:flex;
+    align-items:center;
+    gap: 4px;
+  }
+  .ntr-tag{
+    display:inline-block;
+    background: rgba(255,90,122,0.15);
+    color: var(--accent);
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    padding: 2px 8px;
+    border-radius: 5px;
+  }
+  .tags-row{
+    display:flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 6px;
+  }
+  .tag-chip{
+    font-size: 0.72rem;
+    color: var(--text-dim);
+    background: var(--bg-raised);
+    border: 1px solid var(--line);
+    padding: 3px 9px;
+    border-radius: 20px;
+  }
+
+  /* ---------- Ad slot ---------- */
+  .ad-slot{
+    margin: 22px auto;
+    padding: 14px 0;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    min-height: 60px;
+  }
+  .ad-slot::before,
+  .ad-slot::after{
+    content:"";
+    flex:1;
+    height:1px;
+    background: var(--line);
+  }
+  .ad-slot .ad-label{
+    font-size: 0.68rem;
+    letter-spacing: 0.04em;
+    color: var(--text-dim);
+    padding: 0 10px;
+    white-space: nowrap;
+  }
+  /* Actual ad element sits below the divider row */
+  .ad-slot-container{
+    width:100%;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    gap:8px;
+  }
+  .ad-slot-container > div[data-mndbanid]{
+    min-height: 50px;
+  }
+
+  /* ---------- Pages ---------- */
+  .page{
+    display:block;
+    width:100%;
+    line-height:0; /* kill inline-img gap */
+  }
+  .page img{
+    display:block;
+    width:100%;
+    height:auto;
+    background: var(--bg-raised);
+  }
+  .page-num{
+    text-align:center;
+    font-size: 0.72rem;
+    color: var(--text-dim);
+    padding: 6px 0;
+    background: var(--bg);
+  }
+
+  /* ---------- States ---------- */
+  .state{
+    padding: 60px 20px;
+    text-align:center;
+    color: var(--text-dim);
+  }
+  .state h2{
+    color: var(--text);
+    font-size: 1.1rem;
+    margin: 0 0 8px;
+  }
+  .state p{
+    font-size: 0.9rem;
+    line-height: 1.5;
+    max-width: 320px;
+    margin: 0 auto;
+  }
+  .spinner{
+    width: 26px; height: 26px;
+    border: 3px solid var(--line);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    margin: 0 auto 16px;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin{ to{ transform: rotate(360deg); } }
+
+  .end-note{
+    text-align:center;
+    padding: 28px 16px 4px;
+    color: var(--text-dim);
+    font-size: 0.85rem;
+  }
+</style>
+</head>
+<body>
+
+<div class="wrap" id="wrap">
+  <div class="state" id="loadingState">
+    <div class="spinner"></div>
+    <h2>Loading comic…</h2>
+  </div>
+</div>
+
+<script>
+(function(){
+
+  // Ad slot markup — reused for every placement (title, every 9 pages, end)
+  function adSlotHTML(){
+    return (
+      '<div class="ad-slot"><span class="ad-label">Advertisement</span></div>' +
+      '<div class="ad-slot-container">' +
+        '<div data-mndbanid="cd65bd0a-9d1d-4729-b928-1e735cf623f8"></div>' +
+      '</div>'
+    );
+  }
+
+  function getCodeFromURL(){
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get('code');
+    return code ? code.trim() : null;
+  }
+
+  function renderNotAvailable(reason){
+    document.getElementById('wrap').innerHTML =
+      '<div class="state">' +
+        '<h2>Not available yet</h2>' +
+        '<p>' + reason + '</p>' +
+      '</div>';
+  }
+
+  function renderComic(data){
+    const wrap = document.getElementById('wrap');
+    const images = data.images || [];
+    const title = data.title || 'Untitled';
+
+    let html = '';
+
+    // Title block — mirrors Arc Comic's own post structure: title,
+    // author/code/rating, full color/NTR/language, tags.
+    html += '<div class="title-block">';
+    html += '<h1>' + escapeHTML(title) + '</h1>';
+
+    html += '<div class="meta-row">';
+    if (data.author) html += '<span>✨ ' + escapeHTML(data.author) + '</span>';
+    if (data.code) html += '<span>Code: ' + escapeHTML(String(data.code)) + '</span>';
+    if (data.rating) html += '<span>⭐ ' + escapeHTML(String(data.rating)) + '</span>';
+    if (images.length) html += '<span>' + images.length + ' pages</span>';
+    if (data.is_ntr) html += '<span class="ntr-tag">NTR</span>';
+    html += '</div>';
+
+    html += '<div class="meta-row">';
+    if (data.categories) html += '<span>⚡ ' + escapeHTML(data.categories) + '</span>';
+    if (data.full_color) html += '<span>💫 ' + (String(data.full_color).toLowerCase() === 'yes' ? 'Full Color' : 'B&W') + '</span>';
+    if (data.language) html += '<span>🌐 ' + escapeHTML(String(data.language)) + '</span>';
+    html += '</div>';
+
+    if (Array.isArray(data.tags) && data.tags.length){
+      html += '<div class="tags-row">';
+      data.tags.forEach(function(tag){
+        html += '<span class="tag-chip">' + escapeHTML(tag) + '</span>';
+      });
+      html += '</div>';
+    }
+
+    html += '</div>';
+
+    // Ad right after title, before first page
+    html += adSlotHTML();
+
+    // Pages, with an ad slot every 9 pages
+    images.forEach(function(src, i){
+      const pageNum = i + 1;
+      html += '<div class="page">';
+      html += '<img src="' + escapeAttr(src) + '" loading="lazy" alt="Page ' + pageNum + '">';
+      html += '<div class="page-num">' + pageNum + ' / ' + images.length + '</div>';
+      html += '</div>';
+
+      // After every 9th page (but not immediately duplicating the end-ad if it's also the last page)
+      if (pageNum % 9 === 0 && pageNum !== images.length){
+        html += adSlotHTML();
+      }
+    });
+
+    // Final ad after the last page
+    html += adSlotHTML();
+    html += '<div class="end-note">End of comic</div>';
+
+    wrap.innerHTML = html;
+  }
+
+  function escapeHTML(str){
+    const d = document.createElement('div');
+    d.textContent = str;
+    return d.innerHTML;
+  }
+  function escapeAttr(str){
+    return String(str).replace(/"/g, '&quot;');
+  }
+
+  async function init(){
+    const code = getCodeFromURL();
+    if (!code){
+      renderNotAvailable('No comic code was provided in the link.');
+      return;
+    }
+
+    try{
+      const res = await fetch('data/' + encodeURIComponent(code) + '.json', { cache: 'no-store' });
+      if (!res.ok){
+        renderNotAvailable('This comic isn\'t in our library yet. Check back later.');
+        return;
+      }
+      const data = await res.json();
+      if (!data || !Array.isArray(data.images) || data.images.length === 0){
+        renderNotAvailable('This comic\'s pages couldn\'t be loaded.');
+        return;
+      }
+      renderComic(data);
+    } catch(err){
+      renderNotAvailable('Something went wrong loading this comic. Please try again.');
+    }
+  }
+
+  init();
+})();
+</script>
+
+</body>
+</html>
