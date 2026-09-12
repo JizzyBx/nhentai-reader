@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<!-- READER_HTML_VERSION: 3 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -327,14 +328,43 @@
 
   let siteConfig = null; // fetched once, reused for header + footer
 
-  // Ad slot markup — reused for every placement (title, every 9 pages, end)
+  // Ad slot markup — each call gets its own placeholder container with
+  // a unique id. The actual data-mndbanid div for each slot is created
+  // fresh via JS afterward (see injectAdSlots), NOT baked into this
+  // HTML string. Multiple identical static data-mndbanid elements
+  // stamped into one page at once appears to be why every ad slot
+  // returned zero fill — ad networks commonly only serve the first
+  // instance of a given zone id per pageview and silently ignore
+  // duplicates. This matches the fix that got ads working on the
+  // sister site: inject a fresh div exactly when/where it's needed,
+  // rather than pre-rendering several copies at once.
+  let _adSlotCounter = 0;
   function adSlotHTML(){
+    const slotId = 'ad-slot-' + (_adSlotCounter++);
     return (
       '<div class="ad-slot"><span class="ad-label">Advertisement</span></div>' +
-      '<div class="ad-slot-container">' +
-        '<div data-mndbanid="79d7aa12-5511-404b-89a3-dbeb4ae4b292"></div>' +
-      '</div>'
+      '<div class="ad-slot-container" id="' + slotId + '"></div>'
     );
+  }
+
+  function injectAdSlots(){
+    const containers = document.querySelectorAll('.ad-slot-container');
+    containers.forEach(function(container){
+      const div = document.createElement('div');
+      div.setAttribute('data-mndbanid', '79d7aa12-5511-404b-89a3-dbeb4ae4b292');
+      container.appendChild(div);
+    });
+    // banner.js reads data-mndbanid elements present in the DOM when
+    // it loads; since it's loaded with `async` in <head>, it may have
+    // already run before these elements existed. If it exposes a
+    // manual re-scan/refresh hook, call it now so it picks up the
+    // freshly-added divs instead of only ones present at its own
+    // initial load.
+    if (window.mndBanner && typeof window.mndBanner.refresh === 'function'){
+      window.mndBanner.refresh();
+    } else if (window.MNDBanner && typeof window.MNDBanner.refresh === 'function'){
+      window.MNDBanner.refresh();
+    }
   }
 
   function getCodeFromURL(){
@@ -483,6 +513,7 @@
     html += followFooterHTML(siteConfig);
 
     wrap.innerHTML = html;
+    injectAdSlots();
   }
 
   function escapeHTML(str){
