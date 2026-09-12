@@ -38,27 +38,38 @@
 
   /* ---------- Title block ---------- */
   .title-block{
-    padding: 28px 16px 20px;
+    padding: 20px 16px 24px;
     border-bottom: 1px solid var(--line);
   }
   .title-block h1{
-    font-size: 1.35rem;
-    line-height: 1.35;
-    margin: 0 0 10px;
-    font-weight: 600;
+    font-size: 1.5rem;
+    line-height: 1.3;
+    margin: 0 0 14px;
+    font-weight: 800;
   }
-  .meta-row{
+  .stats-row{
     display:flex;
-    gap: 10px 14px;
+    align-items:center;
+    gap: 10px 16px;
     flex-wrap: wrap;
     font-size: 0.85rem;
     color: var(--text-dim);
-    margin-bottom: 10px;
+    margin-bottom: 16px;
   }
-  .meta-row span{
+  .stats-row span{
     display:flex;
     align-items:center;
     gap: 4px;
+  }
+  .rating-pill{
+    display:inline-flex;
+    align-items:center;
+    gap:4px;
+    background: rgba(245,158,11,0.15);
+    color: var(--brand-orange);
+    font-weight: 700;
+    padding: 2px 10px;
+    border-radius: 20px;
   }
   .ntr-tag{
     display:inline-block;
@@ -70,6 +81,52 @@
     padding: 2px 8px;
     border-radius: 5px;
   }
+
+  /* Info card grid — mirrors arccomic.github.io's AUTHOR/CODE/CATEGORY/
+     LANGUAGE/FULL COLOR/NTR card layout exactly, two per row. */
+  .info-grid{
+    display:grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin-bottom: 18px;
+  }
+  .info-card{
+    display:flex;
+    align-items:center;
+    gap: 10px;
+    background: var(--bg-raised);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 12px 14px;
+  }
+  .info-card .icon{
+    flex-shrink:0;
+    width: 34px; height: 34px;
+    border-radius: 8px;
+    background: rgba(255,255,255,0.06);
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    font-size: 1rem;
+  }
+  .info-card .label{
+    display:block;
+    font-size: 0.68rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    margin-bottom: 2px;
+  }
+  .info-card .value{
+    display:block;
+    font-size: 0.95rem;
+    font-weight: 700;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   .tags-row{
     display:flex;
     flex-wrap: wrap;
@@ -275,7 +332,7 @@
     return (
       '<div class="ad-slot"><span class="ad-label">Advertisement</span></div>' +
       '<div class="ad-slot-container">' +
-        '<div data-mndbanid="cd65bd0a-9d1d-4729-b928-1e735cf623f8"></div>' +
+        '<div data-mndbanid="79d7aa12-5511-404b-89a3-dbeb4ae4b292"></div>' +
       '</div>'
     );
   }
@@ -354,23 +411,37 @@
 
     let html = '';
 
-    // Title block — mirrors Arc Comic's own post structure: title,
-    // author/code/rating, full color/NTR/language, tags.
+    // Title block — mirrors arccomic.github.io's own post structure:
+    // title, a small stats row (rating/pages/NTR), then a grid of
+    // labeled info cards (AUTHOR/CODE/CATEGORY/LANGUAGE/FULL COLOR/
+    // NTR), then tag chips.
     html += '<div class="title-block">';
     html += '<h1>' + escapeHTML(title) + '</h1>';
 
-    html += '<div class="meta-row">';
-    if (data.author) html += '<span>✨ ' + escapeHTML(data.author) + '</span>';
-    if (data.code) html += '<span>Code: ' + escapeHTML(String(data.code)) + '</span>';
-    if (data.rating) html += '<span>⭐ ' + escapeHTML(String(data.rating)) + '</span>';
+    html += '<div class="stats-row">';
+    if (data.rating) html += '<span class="rating-pill">⭐ ' + escapeHTML(String(data.rating)) + '</span>';
     if (images.length) html += '<span>' + images.length + ' pages</span>';
     if (data.is_ntr) html += '<span class="ntr-tag">NTR</span>';
     html += '</div>';
 
-    html += '<div class="meta-row">';
-    if (data.categories) html += '<span>⚡ ' + escapeHTML(data.categories) + '</span>';
-    if (data.full_color) html += '<span>💫 ' + (String(data.full_color).toLowerCase() === 'yes' ? 'Full Color' : 'B&W') + '</span>';
-    if (data.language) html += '<span>🌐 ' + escapeHTML(String(data.language)) + '</span>';
+    html += '<div class="info-grid">';
+    if (data.author) {
+      html += '<div class="info-card"><div class="icon">✨</div><div><span class="label">Author</span><span class="value">' + escapeHTML(data.author) + '</span></div></div>';
+    }
+    if (data.code) {
+      html += '<div class="info-card"><div class="icon">⭐</div><div><span class="label">Code</span><span class="value">' + escapeHTML(String(data.code)) + '</span></div></div>';
+    }
+    if (data.categories) {
+      html += '<div class="info-card"><div class="icon">⚡</div><div><span class="label">Category</span><span class="value">' + escapeHTML(data.categories) + '</span></div></div>';
+    }
+    if (data.language) {
+      html += '<div class="info-card"><div class="icon">🌐</div><div><span class="label">Language</span><span class="value">' + escapeHTML(String(data.language)) + '</span></div></div>';
+    }
+    if (data.full_color) {
+      const isColor = String(data.full_color).toLowerCase() === 'yes';
+      html += '<div class="info-card"><div class="icon">🎨</div><div><span class="label">Full Color</span><span class="value">' + (isColor ? 'Yes' : 'No') + '</span></div></div>';
+    }
+    html += '<div class="info-card"><div class="icon">🌙</div><div><span class="label">NTR</span><span class="value">' + (data.is_ntr ? 'Yes' : 'No') + '</span></div></div>';
     html += '</div>';
 
     if (Array.isArray(data.tags) && data.tags.length){
@@ -385,6 +456,7 @@
 
     // Ad right after title, before first page
     html += adSlotHTML();
+
 
     // Pages, with an ad slot every 9 pages
     images.forEach(function(src, i){
