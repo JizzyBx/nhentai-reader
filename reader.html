@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- READER_HTML_VERSION: 3 -->
+<!-- READER_HTML_VERSION: 4 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -7,7 +7,12 @@
 <title>Reader</title>
 
 <!-- Mondiad banner ad script -->
-<script async src="https://ss.mrmnd.com/banner.js"></script>
+<!-- banner.js is loaded dynamically in JS, after ad divs exist —
+     see injectAdSlots() — not statically here, to avoid a load-order
+     race: as a static async tag, this script could run before
+     renderComic() ever creates any .ad-slot-container elements,
+     meaning it would find zero data-mndbanid elements on its one
+     and only scan of the page. -->
 
 <style>
   :root{
@@ -349,21 +354,30 @@
 
   function injectAdSlots(){
     const containers = document.querySelectorAll('.ad-slot-container');
+    if (containers.length === 0) return;
+
     containers.forEach(function(container){
       const div = document.createElement('div');
       div.setAttribute('data-mndbanid', '79d7aa12-5511-404b-89a3-dbeb4ae4b292');
       container.appendChild(div);
     });
-    // banner.js reads data-mndbanid elements present in the DOM when
-    // it loads; since it's loaded with `async` in <head>, it may have
-    // already run before these elements existed. If it exposes a
-    // manual re-scan/refresh hook, call it now so it picks up the
-    // freshly-added divs instead of only ones present at its own
-    // initial load.
-    if (window.mndBanner && typeof window.mndBanner.refresh === 'function'){
-      window.mndBanner.refresh();
-    } else if (window.MNDBanner && typeof window.MNDBanner.refresh === 'function'){
-      window.MNDBanner.refresh();
+
+    // Load banner.js only now, after every data-mndbanid div already
+    // exists in the DOM — this sidesteps needing to know whether
+    // Mondiad's script exposes any kind of manual re-scan/refresh
+    // method (it may or may not; that was never actually confirmed,
+    // only guessed at in an earlier version of this file). Loading
+    // the script fresh each time this function runs means its first
+    // and only scan of the page happens after the elements it's
+    // looking for are already there — no race condition to work
+    // around. Guard against loading it twice if injectAdSlots is
+    // somehow called more than once in a page's lifetime.
+    if (!window._mndBannerScriptLoaded) {
+      window._mndBannerScriptLoaded = true;
+      const script = document.createElement('script');
+      script.src = 'https://ss.mrmnd.com/banner.js';
+      script.async = true;
+      document.head.appendChild(script);
     }
   }
 
