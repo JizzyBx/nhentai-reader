@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- READER_HTML_VERSION: 4 -->
+<!-- READER_HTML_VERSION: 5 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -228,38 +228,14 @@
   .follow-arrow{ color: var(--text-dim); font-size:1.1rem; flex-shrink:0; }
 
 
-  .ad-slot{
-    margin: 22px auto;
-    padding: 14px 0;
-    display:flex;
-    align-items:center;
-    justify-content:center;
-    min-height: 60px;
-  }
-  .ad-slot::before,
-  .ad-slot::after{
-    content:"";
-    flex:1;
-    height:1px;
-    background: var(--line);
-  }
-  .ad-slot .ad-label{
-    font-size: 0.68rem;
-    letter-spacing: 0.04em;
-    color: var(--text-dim);
-    padding: 0 10px;
-    white-space: nowrap;
-  }
-  /* Actual ad element sits below the divider row */
+  /* Ad container sits with its own top/bottom margin, no label or
+     divider line — ads are visually distinct on their own. */
   .ad-slot-container{
     width:100%;
     display:flex;
     flex-direction:column;
     align-items:center;
-    gap:8px;
-  }
-  .ad-slot-container > div[data-mndbanid]{
-    min-height: 50px;
+    margin: 22px 0;
   }
 
   /* ---------- Pages ---------- */
@@ -346,10 +322,7 @@
   let _adSlotCounter = 0;
   function adSlotHTML(){
     const slotId = 'ad-slot-' + (_adSlotCounter++);
-    return (
-      '<div class="ad-slot"><span class="ad-label">Advertisement</span></div>' +
-      '<div class="ad-slot-container" id="' + slotId + '"></div>'
-    );
+    return '<div class="ad-slot-container" id="' + slotId + '"></div>';
   }
 
   function injectAdSlots(){
