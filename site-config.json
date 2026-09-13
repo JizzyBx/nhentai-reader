@@ -28,5 +28,9 @@
       "desc": "Join our X  for doujinshi Comics, Manga and updates",
       "url": "https://x.com/ArcComicDaily"
     }
-  ]
+  ],
+  "ad_network": "adsterra",
+  "adsterra_key": "",
+  "adsterra_width": 300,
+  "adsterra_height": 250
 }
