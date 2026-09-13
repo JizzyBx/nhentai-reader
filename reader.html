@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- READER_HTML_VERSION: 5 -->
+<!-- READER_HTML_VERSION: 6 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -325,10 +325,25 @@
     return '<div class="ad-slot-container" id="' + slotId + '"></div>';
   }
 
+  // Ad network is chosen from the dashboard (site-config.json ->
+  // ad_network: "mondiad" | "adsterra") and pushed through the same
+  // pipeline as branding. Whichever network is NOT active gets zero
+  // script tags, zero divs, zero network calls — no leftover/dead
+  // fill attempts from the inactive network.
   function injectAdSlots(){
     const containers = document.querySelectorAll('.ad-slot-container');
     if (containers.length === 0) return;
 
+    const network = (siteConfig && siteConfig.ad_network) || 'mondiad';
+
+    if (network === 'adsterra') {
+      injectAdsterraSlots(containers);
+    } else {
+      injectMondiadSlots(containers);
+    }
+  }
+
+  function injectMondiadSlots(containers){
     containers.forEach(function(container){
       const div = document.createElement('div');
       div.setAttribute('data-mndbanid', '79d7aa12-5511-404b-89a3-dbeb4ae4b292');
@@ -352,6 +367,52 @@
       script.async = true;
       document.head.appendChild(script);
     }
+  }
+
+  // Adsterra's "invoke.js" banner format is not a div-scan like
+  // Mondiad's — it reads a single global `atOptions` object at the
+  // moment it executes, then document.writes/injects one iframe
+  // where its <script> tag sits. That means each slot needs the
+  // global set immediately before its own invoke.js load, and each
+  // slot needs its own <script src="invoke.js"> — a single shared
+  // load only ever fills the first slot. Slots are filled in
+  // sequence (each invoke.js load awaited before starting the next)
+  // so no slot overwrites another slot's still-pending atOptions.
+  function injectAdsterraSlots(containers){
+    const key = (siteConfig && siteConfig.adsterra_key) || 'f497c72eaa4ac3c75ebd648cab373c98';
+    const width = (siteConfig && siteConfig.adsterra_width) || 300;
+    const height = (siteConfig && siteConfig.adsterra_height) || 250;
+
+    let i = 0;
+    const list = Array.prototype.slice.call(containers);
+
+    function loadNext(){
+      if (i >= list.length) return;
+      const container = list[i++];
+
+      // Adsterra's invoke.js expects a fixed-size box to write its
+      // iframe into — give each container an explicit size matching
+      // atOptions so the layout doesn't jump once the ad loads.
+      container.style.width = width + 'px';
+      container.style.height = height + 'px';
+
+      window.atOptions = {
+        'key': key,
+        'format': 'iframe',
+        'height': height,
+        'width': width,
+        'params': {}
+      };
+
+      const script = document.createElement('script');
+      script.src = 'https://www.highrevenueformat.com/' + key + '/invoke.js';
+      script.async = true;
+      script.onload = loadNext;
+      script.onerror = loadNext; // don't let one bad slot block the rest
+      container.appendChild(script);
+    }
+
+    loadNext();
   }
 
   function getCodeFromURL(){
