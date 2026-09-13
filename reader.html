@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- READER_HTML_VERSION: 8 -->
+<!-- READER_HTML_VERSION: 9 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -266,35 +266,20 @@
   }
 
   /* ---------- Paginated mode ---------- */
+  /* Normal document flow — NOT position:fixed. Ads sit before and
+     after the page image and scroll naturally with the rest of the
+     page, like a sandwich: ad -> image -> nav bar -> ad. */
   .paginated-wrap{
     display:flex;
     flex-direction:column;
-    /* fixed top/bottom ad bars are excluded via this height calc so
-       the page image area sits exactly between them, never under them */
-    min-height: calc(100vh - 96px);
+    width:100%;
+    max-width:720px;
+    margin: 0 auto;
   }
-  .paginated-ad-bar{
-    position: fixed;
-    left:0; right:0;
-    display:flex;
-    justify-content:center;
-    align-items:center;
-    background: var(--bg);
-    z-index: 50;
-    padding: 4px 0;
-  }
-  .paginated-ad-bar.top{ top:0; border-bottom: 1px solid var(--line); }
-  .paginated-ad-bar.bottom{ bottom:0; border-top: 1px solid var(--line); }
 
   .paginated-stage{
     position: relative;
     width:100%;
-    max-width:720px;
-    margin: 0 auto;
-    /* room for the fixed ad bars above/below so the image is never hidden behind them */
-    padding-top: 58px;
-    padding-bottom: 58px;
-    min-height: 60vh;
   }
   .paginated-stage img{
     display:block;
@@ -304,19 +289,44 @@
   }
   .tap-zone{
     position:absolute;
-    top:58px; bottom:58px;
+    top:0; bottom:0;
     width:50%;
     /* invisible — purely a hit target, no visual change on tap */
   }
   .tap-zone.left{ left:0; }
   .tap-zone.right{ right:0; }
 
-  .paginated-counter{
-    text-align:center;
-    font-size: 0.8rem;
-    color: var(--text-dim);
-    padding: 8px 0 0;
+  /* Nav bar — sits between the image and the bottom ad, nhentai-style:
+     jump-to-first/last (double chevrons) + prev/next (single chevron)
+     + page counter in the middle. */
+  .paginated-nav{
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    gap: 6px;
+    padding: 14px 0;
   }
+  .paginated-nav button{
+    background: var(--bg-raised);
+    border: 1px solid var(--line);
+    color: var(--text);
+    border-radius: 8px;
+    padding: 8px 14px;
+    font-size: 0.95rem;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .paginated-nav button:disabled{
+    opacity: 0.35;
+    cursor: default;
+  }
+  .paginated-nav .pg-counter{
+    padding: 0 10px;
+    font-size: 0.85rem;
+    color: var(--text-dim);
+    white-space: nowrap;
+  }
+
 
   /* ---------- Pages (scroll mode) ---------- */
   .page{
@@ -750,12 +760,17 @@
 
   // ---------- Paginated mode ----------
   //
-  // One page visible at a time. Left-half/right-half invisible tap
-  // zones move to the previous/next page. Ads are pinned to the
-  // screen's top/bottom edges (position:fixed) and stay visible
-  // across every page turn, refreshing every 9 turns. Page turns are
-  // pure JS (swap which <img> is shown) — never a real navigation —
-  // so there's no reload and no scroll-to-top.
+  // One page visible at a time, in the order: ad -> image -> nav bar
+  // -> ad. All in normal document flow (NOT position:fixed) — ads
+  // scroll naturally with the page like a sandwich around the image,
+  // not pinned to the viewport edges. Left-half/right-half invisible
+  // tap zones AND the nav bar's prev/next buttons both move pages.
+  // Both ad slots refresh every 5 page-turns (scroll mode's own
+  // every-9-pages cadence is untouched — this only applies here).
+  // Page turns are pure JS (swap which <img> is shown) — never a
+  // real navigation — so there's no reload and no scroll-to-top.
+
+  const PAGINATED_AD_REFRESH_EVERY = 5;
 
   let _pgIndex = 0;          // 0-based current page
   let _pgImages = [];
@@ -772,34 +787,36 @@
     _pgLoaded = {};
 
     area.innerHTML =
-      '<div class="paginated-ad-bar top" id="pgAdTop"></div>' +
       '<div class="paginated-wrap">' +
+        '<div class="ad-slot-container" id="pgAdTop"></div>' +
         '<div class="paginated-stage" id="pgStage">' +
           '<img id="pgImage" alt="">' +
           '<div class="tap-zone left" id="pgTapLeft"></div>' +
           '<div class="tap-zone right" id="pgTapRight"></div>' +
         '</div>' +
-        '<div class="paginated-counter" id="pgCounter"></div>' +
-      '</div>' +
-      '<div class="paginated-ad-bar bottom" id="pgAdBottom"></div>';
+        '<div class="paginated-nav">' +
+          '<button id="pgFirst" title="First page">&laquo;</button>' +
+          '<button id="pgPrev" title="Previous page">&lsaquo;</button>' +
+          '<span class="pg-counter" id="pgCounter"></span>' +
+          '<button id="pgNext" title="Next page">&rsaquo;</button>' +
+          '<button id="pgLast" title="Last page">&raquo;</button>' +
+        '</div>' +
+        '<div class="ad-slot-container" id="pgAdBottom"></div>' +
+      '</div>';
 
-    // Top/bottom ad bars each get one ad slot container, injected once here.
-    document.getElementById('pgAdTop').appendChild(makeAdContainer('pg-ad-top'));
-    document.getElementById('pgAdBottom').appendChild(makeAdContainer('pg-ad-bottom'));
-    injectAdSlots(document.querySelectorAll('#pgAdTop .ad-slot-container, #pgAdBottom .ad-slot-container'));
+    // Both ad slots injected once here — refreshAdSlots() re-fills
+    // them in place later without touching anything else on rerender.
+    injectAdSlots(document.querySelectorAll('#pgAdTop, #pgAdBottom'));
 
     document.getElementById('pgTapLeft').addEventListener('click', function(){ pgTurn(-1); });
     document.getElementById('pgTapRight').addEventListener('click', function(){ pgTurn(1); });
+    document.getElementById('pgPrev').addEventListener('click', function(){ pgTurn(-1); });
+    document.getElementById('pgNext').addEventListener('click', function(){ pgTurn(1); });
+    document.getElementById('pgFirst').addEventListener('click', function(){ pgJump(0); });
+    document.getElementById('pgLast').addEventListener('click', function(){ pgJump(_pgImages.length - 1); });
 
     pgShow(0);
     pgPreloadAround(0);
-  }
-
-  function makeAdContainer(idPrefix){
-    const div = document.createElement('div');
-    div.className = 'ad-slot-container';
-    div.id = idPrefix + '-' + (_adSlotCounter++);
-    return div;
   }
 
   function pgShow(index){
@@ -812,6 +829,15 @@
     }
     const counter = document.getElementById('pgCounter');
     if (counter) counter.textContent = (index + 1) + ' / ' + _pgImages.length;
+
+    const prevBtn = document.getElementById('pgPrev');
+    const nextBtn = document.getElementById('pgNext');
+    const firstBtn = document.getElementById('pgFirst');
+    const lastBtn = document.getElementById('pgLast');
+    if (prevBtn) prevBtn.disabled = (index <= 0);
+    if (firstBtn) firstBtn.disabled = (index <= 0);
+    if (nextBtn) nextBtn.disabled = (index >= _pgImages.length - 1);
+    if (lastBtn) lastBtn.disabled = (index >= _pgImages.length - 1);
   }
 
   // Preloads the current page plus the next 2 (3 total in flight/cached)
@@ -826,19 +852,32 @@
     }
   }
 
+  function pgMaybeRefreshAds(){
+    _pgTurnCount++;
+    if (_pgTurnCount >= PAGINATED_AD_REFRESH_EVERY){
+      _pgTurnCount = 0;
+      refreshAdSlots(document.querySelectorAll('#pgAdTop, #pgAdBottom'));
+    }
+  }
+
   function pgTurn(delta){
     const next = _pgIndex + delta;
     if (next < 0 || next >= _pgImages.length) return; // no-op at the ends
 
     pgShow(next);
     pgPreloadAround(next);
-
-    _pgTurnCount++;
-    if (_pgTurnCount >= 9){
-      _pgTurnCount = 0;
-      refreshAdSlots(document.querySelectorAll('#pgAdTop .ad-slot-container, #pgAdBottom .ad-slot-container'));
-    }
+    pgMaybeRefreshAds();
   }
+
+  // Direct jump (first/last buttons) — same ad-refresh counting as a
+  // normal turn, since it's still one navigation action by the reader.
+  function pgJump(index){
+    if (index === _pgIndex) return;
+    pgShow(index);
+    pgPreloadAround(index);
+    pgMaybeRefreshAds();
+  }
+
 
   function escapeHTML(str){
     const d = document.createElement('div');
