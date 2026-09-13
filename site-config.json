@@ -32,5 +32,6 @@
   "ad_network": "adsterra",
   "adsterra_key": "",
   "adsterra_width": 300,
-  "adsterra_height": 250
+  "adsterra_height": 250,
+  "paginated_mode_enabled": true
 }
