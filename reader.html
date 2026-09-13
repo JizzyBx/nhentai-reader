@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- READER_HTML_VERSION: 6 -->
+<!-- READER_HTML_VERSION: 8 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -238,7 +238,87 @@
     margin: 22px 0;
   }
 
-  /* ---------- Pages ---------- */
+  /* ---------- Reading mode toggle ---------- */
+  .mode-toggle-row{
+    display:flex;
+    gap: 10px;
+    padding: 0 16px 18px;
+  }
+  .mode-toggle-btn{
+    flex:1;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    gap:6px;
+    padding: 12px;
+    border-radius: 10px;
+    border: 1px solid var(--line);
+    background: var(--bg-raised);
+    color: var(--text-dim);
+    font-weight: 700;
+    font-size: 0.9rem;
+    cursor:pointer;
+  }
+  .mode-toggle-btn.active{
+    border-color: var(--brand-orange);
+    color: var(--brand-orange);
+    background: rgba(245,158,11,0.10);
+  }
+
+  /* ---------- Paginated mode ---------- */
+  .paginated-wrap{
+    display:flex;
+    flex-direction:column;
+    /* fixed top/bottom ad bars are excluded via this height calc so
+       the page image area sits exactly between them, never under them */
+    min-height: calc(100vh - 96px);
+  }
+  .paginated-ad-bar{
+    position: fixed;
+    left:0; right:0;
+    display:flex;
+    justify-content:center;
+    align-items:center;
+    background: var(--bg);
+    z-index: 50;
+    padding: 4px 0;
+  }
+  .paginated-ad-bar.top{ top:0; border-bottom: 1px solid var(--line); }
+  .paginated-ad-bar.bottom{ bottom:0; border-top: 1px solid var(--line); }
+
+  .paginated-stage{
+    position: relative;
+    width:100%;
+    max-width:720px;
+    margin: 0 auto;
+    /* room for the fixed ad bars above/below so the image is never hidden behind them */
+    padding-top: 58px;
+    padding-bottom: 58px;
+    min-height: 60vh;
+  }
+  .paginated-stage img{
+    display:block;
+    width:100%;
+    height:auto;
+    background: var(--bg-raised);
+  }
+  .tap-zone{
+    position:absolute;
+    top:58px; bottom:58px;
+    width:50%;
+    /* invisible — purely a hit target, no visual change on tap */
+  }
+  .tap-zone.left{ left:0; }
+  .tap-zone.right{ right:0; }
+
+  .paginated-counter{
+    text-align:center;
+    font-size: 0.8rem;
+    color: var(--text-dim);
+    padding: 8px 0 0;
+  }
+
+  /* ---------- Pages (scroll mode) ---------- */
   .page{
     display:block;
     width:100%;
@@ -330,8 +410,8 @@
   // pipeline as branding. Whichever network is NOT active gets zero
   // script tags, zero divs, zero network calls — no leftover/dead
   // fill attempts from the inactive network.
-  function injectAdSlots(){
-    const containers = document.querySelectorAll('.ad-slot-container');
+  function injectAdSlots(containers){
+    containers = containers || document.querySelectorAll('.ad-slot-container');
     if (containers.length === 0) return;
 
     const network = (siteConfig && siteConfig.ad_network) || 'mondiad';
@@ -341,6 +421,15 @@
     } else {
       injectMondiadSlots(containers);
     }
+  }
+
+  // Re-requests a fresh ad into containers that already have one —
+  // used by paginated mode's every-9-page-turns refresh. Clears
+  // existing content first so Mondiad/Adsterra don't just find their
+  // old div/iframe still sitting there and skip re-serving.
+  function refreshAdSlots(containers){
+    containers.forEach(function(c){ c.innerHTML = ''; });
+    injectAdSlots(containers);
   }
 
   function injectMondiadSlots(containers){
@@ -393,8 +482,13 @@
       // Adsterra's invoke.js expects a fixed-size box to write its
       // iframe into — give each container an explicit size matching
       // atOptions so the layout doesn't jump once the ad loads.
+      // margin: 0 auto centers this fixed-width box within its
+      // full-width parent row — without this it sits flush left,
+      // since a fixed-width block element doesn't auto-center on
+      // its own even inside a flex/centered parent.
       container.style.width = width + 'px';
       container.style.height = height + 'px';
+      container.style.margin = '0 auto';
 
       window.atOptions = {
         'key': key,
@@ -532,9 +626,105 @@
 
     html += '</div>';
 
+    // Reading-mode toggle — two buttons, side by side, right after
+    // tags/info and before any pages/ads. Persisted in localStorage
+    // so it's remembered site-wide on the next comic too. Gated
+    // server-side by site-config.json's paginated_mode_enabled — a
+    // dashboard kill switch. When disabled, these buttons never even
+    // render, so every visitor gets Scroll mode regardless of
+    // whatever they may have saved in localStorage from an earlier
+    // session while testing was on.
+    if (siteConfig && siteConfig.paginated_mode_enabled) {
+      html += '<div class="mode-toggle-row" id="modeToggleRow">' +
+        '<button class="mode-toggle-btn" id="modeBtnScroll">📜 Scroll</button>' +
+        '<button class="mode-toggle-btn" id="modeBtnPaginated">📖 Paginated</button>' +
+      '</div>';
+    }
+
+    // Everything mode-dependent (ad slots + page images) lives inside
+    // #pagesArea so switching modes only re-renders this one section —
+    // header, title block, tags, back button, and footer never move.
+    html += '<div id="pagesArea"></div>';
+
+    // Back-to-channel button, then the follow-links footer — both
+    // editable from the dashboard, both optional (skip cleanly if
+    // site-config.json is missing/unconfigured). These sit AFTER
+    // pagesArea in the DOM always, regardless of reading mode.
+    html += backButtonHTML(siteConfig);
+    html += followFooterHTML(siteConfig);
+
+    wrap.innerHTML = html;
+
+    _currentImages = images;
+    initModeToggle();
+    renderPagesArea(images);
+  }
+
+  // ---------- Reading mode: state + toggle ----------
+
+  let _currentImages = [];
+  const READING_MODE_KEY = 'readingMode'; // localStorage key, site-wide
+
+  // Server-side kill switch wins over any client-saved preference.
+  // If the dashboard has paginated mode disabled, this always
+  // returns 'scroll' — a leftover localStorage value from an earlier
+  // test period is never honored while the switch is off.
+  function getReadingMode(){
+    if (!siteConfig || !siteConfig.paginated_mode_enabled) return 'scroll';
+    const saved = localStorage.getItem(READING_MODE_KEY);
+    return (saved === 'paginated') ? 'paginated' : 'scroll'; // scroll is the default
+  }
+  function setReadingMode(mode){
+    localStorage.setItem(READING_MODE_KEY, mode);
+  }
+
+  function initModeToggle(){
+    const scrollBtn = document.getElementById('modeBtnScroll');
+    const pagBtn = document.getElementById('modeBtnPaginated');
+    if (!scrollBtn || !pagBtn) return; // buttons don't exist while the kill switch is off
+
+    function paint(){
+      const mode = getReadingMode();
+      scrollBtn.classList.toggle('active', mode === 'scroll');
+      pagBtn.classList.toggle('active', mode === 'paginated');
+    }
+    paint();
+
+    scrollBtn.addEventListener('click', function(){
+      if (getReadingMode() === 'scroll') return;
+      setReadingMode('scroll');
+      paint();
+      renderPagesArea(_currentImages);
+    });
+    pagBtn.addEventListener('click', function(){
+      if (getReadingMode() === 'paginated') return;
+      setReadingMode('paginated');
+      paint();
+      renderPagesArea(_currentImages);
+    });
+  }
+
+  // Renders whichever mode is currently active into #pagesArea.
+  // Called on first load and every time the toggle is tapped.
+  function renderPagesArea(images){
+    const mode = getReadingMode();
+    if (mode === 'paginated') {
+      renderPaginated(images);
+    } else {
+      renderScroll(images);
+    }
+  }
+
+  // ---------- Scroll mode (original behavior, unchanged) ----------
+
+  function renderScroll(images){
+    const area = document.getElementById('pagesArea');
+    if (!area) return;
+
+    let html = '';
+
     // Ad right after title, before first page
     html += adSlotHTML();
-
 
     // Pages, with an ad slot every 9 pages
     images.forEach(function(src, i){
@@ -554,14 +744,100 @@
     html += adSlotHTML();
     html += '<div class="end-note">End of comic</div>';
 
-    // Back-to-channel button, then the follow-links footer — both
-    // editable from the dashboard, both optional (skip cleanly if
-    // site-config.json is missing/unconfigured).
-    html += backButtonHTML(siteConfig);
-    html += followFooterHTML(siteConfig);
-
-    wrap.innerHTML = html;
+    area.innerHTML = html;
     injectAdSlots();
+  }
+
+  // ---------- Paginated mode ----------
+  //
+  // One page visible at a time. Left-half/right-half invisible tap
+  // zones move to the previous/next page. Ads are pinned to the
+  // screen's top/bottom edges (position:fixed) and stay visible
+  // across every page turn, refreshing every 9 turns. Page turns are
+  // pure JS (swap which <img> is shown) — never a real navigation —
+  // so there's no reload and no scroll-to-top.
+
+  let _pgIndex = 0;          // 0-based current page
+  let _pgImages = [];
+  let _pgTurnCount = 0;      // turns since last ad refresh
+  let _pgLoaded = {};        // cache of Image() objects already requested, by index
+
+  function renderPaginated(images){
+    const area = document.getElementById('pagesArea');
+    if (!area) return;
+
+    _pgImages = images;
+    _pgIndex = 0;
+    _pgTurnCount = 0;
+    _pgLoaded = {};
+
+    area.innerHTML =
+      '<div class="paginated-ad-bar top" id="pgAdTop"></div>' +
+      '<div class="paginated-wrap">' +
+        '<div class="paginated-stage" id="pgStage">' +
+          '<img id="pgImage" alt="">' +
+          '<div class="tap-zone left" id="pgTapLeft"></div>' +
+          '<div class="tap-zone right" id="pgTapRight"></div>' +
+        '</div>' +
+        '<div class="paginated-counter" id="pgCounter"></div>' +
+      '</div>' +
+      '<div class="paginated-ad-bar bottom" id="pgAdBottom"></div>';
+
+    // Top/bottom ad bars each get one ad slot container, injected once here.
+    document.getElementById('pgAdTop').appendChild(makeAdContainer('pg-ad-top'));
+    document.getElementById('pgAdBottom').appendChild(makeAdContainer('pg-ad-bottom'));
+    injectAdSlots(document.querySelectorAll('#pgAdTop .ad-slot-container, #pgAdBottom .ad-slot-container'));
+
+    document.getElementById('pgTapLeft').addEventListener('click', function(){ pgTurn(-1); });
+    document.getElementById('pgTapRight').addEventListener('click', function(){ pgTurn(1); });
+
+    pgShow(0);
+    pgPreloadAround(0);
+  }
+
+  function makeAdContainer(idPrefix){
+    const div = document.createElement('div');
+    div.className = 'ad-slot-container';
+    div.id = idPrefix + '-' + (_adSlotCounter++);
+    return div;
+  }
+
+  function pgShow(index){
+    if (index < 0 || index >= _pgImages.length) return;
+    _pgIndex = index;
+    const img = document.getElementById('pgImage');
+    if (img) {
+      img.src = _pgImages[index];
+      img.alt = 'Page ' + (index + 1);
+    }
+    const counter = document.getElementById('pgCounter');
+    if (counter) counter.textContent = (index + 1) + ' / ' + _pgImages.length;
+  }
+
+  // Preloads the current page plus the next 2 (3 total in flight/cached)
+  // so tapping forward feels instant rather than load-then-wait.
+  function pgPreloadAround(index){
+    for (let offset = 0; offset <= 2; offset++){
+      const i = index + offset;
+      if (i >= _pgImages.length || _pgLoaded[i]) continue;
+      const im = new Image();
+      im.src = _pgImages[i];
+      _pgLoaded[i] = im;
+    }
+  }
+
+  function pgTurn(delta){
+    const next = _pgIndex + delta;
+    if (next < 0 || next >= _pgImages.length) return; // no-op at the ends
+
+    pgShow(next);
+    pgPreloadAround(next);
+
+    _pgTurnCount++;
+    if (_pgTurnCount >= 9){
+      _pgTurnCount = 0;
+      refreshAdSlots(document.querySelectorAll('#pgAdTop .ad-slot-container, #pgAdBottom .ad-slot-container'));
+    }
   }
 
   function escapeHTML(str){
