@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- READER_HTML_VERSION: 9 -->
+<!-- READER_HTML_VERSION: 10 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -131,6 +131,13 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    text-decoration: none;
+  }
+  a.info-card, a.value, .info-card a.value{
+    cursor: pointer;
+  }
+  .info-card a.value:active, .info-card a.value:hover{
+    text-decoration: underline;
   }
 
   .tags-row{
@@ -146,6 +153,12 @@
     border: 1px solid var(--line);
     padding: 3px 9px;
     border-radius: 20px;
+    text-decoration: none;
+    display: inline-block;
+  }
+  a.tag-chip:active, a.tag-chip:hover{
+    color: var(--text);
+    border-color: var(--text-dim);
   }
 
   /* ---------- Header ---------- */
@@ -608,7 +621,9 @@
 
     html += '<div class="info-grid">';
     if (data.author) {
-      html += '<div class="info-card"><div class="icon">✨</div><div><span class="label">Author</span><span class="value">' + escapeHTML(data.author) + '</span></div></div>';
+      const artistSlug = slugify(data.author);
+      const artistHref = 'https://arccomic.github.io/artists/' + escapeAttr(artistSlug) + '/';
+      html += '<div class="info-card"><div class="icon">✨</div><div><span class="label">Author</span><a class="value" href="' + artistHref + '">' + escapeHTML(data.author) + '</a></div></div>';
     }
     if (data.code) {
       html += '<div class="info-card"><div class="icon">⭐</div><div><span class="label">Code</span><span class="value">' + escapeHTML(String(data.code)) + '</span></div></div>';
@@ -629,7 +644,9 @@
     if (Array.isArray(data.tags) && data.tags.length){
       html += '<div class="tags-row">';
       data.tags.forEach(function(tag){
-        html += '<span class="tag-chip">' + escapeHTML(tag) + '</span>';
+        const tagSlug = slugify(tag);
+        const tagHref = 'https://arccomic.github.io/tags/' + escapeAttr(tagSlug) + '/';
+        html += '<a class="tag-chip" href="' + tagHref + '">' + escapeHTML(tag) + '</a>';
       });
       html += '</div>';
     }
@@ -886,6 +903,22 @@
   }
   function escapeAttr(str){
     return String(str).replace(/"/g, '&quot;');
+  }
+
+  // Turns a tag/artist name into arccomic.github.io's own URL-slug
+  // format so links line up with that site's existing pattern, e.g.
+  // "Okumori Boy" -> "okumori-boy", "Mojarin" -> "mojarin". Lowercase,
+  // spaces/underscores -> hyphens, strip anything that isn't
+  // alphanumeric or a hyphen, collapse repeats, trim leading/trailing
+  // hyphens.
+  function slugify(str){
+    return String(str)
+      .toLowerCase()
+      .trim()
+      .replace(/[\s_]+/g, '-')
+      .replace(/[^a-z0-9-]/g, '')
+      .replace(/-+/g, '-')
+      .replace(/^-|-$/g, '');
   }
 
   async function loadSiteConfig(){
