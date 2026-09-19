@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- READER_HTML_VERSION: 11 -->
+<!-- READER_HTML_VERSION: 12 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -487,28 +487,24 @@
     }
   }
 
-  // Three Adsterra banner units, one per placement, per Adsterra's
-  // own guidance to Adil: use a different banner format at each spot
-  // on the page instead of repeating one size everywhere.
-  //   "top"     — title/paginated-top slot, the original dashboard-
-  //               configurable unit (default 300x250).
-  //   "reading" — every-9th-page slot in scroll mode, fixed 320x50.
-  //   "bottom"  — after the last page / paginated-bottom, fixed 468x60.
+  // Two Adsterra banner units across three placements, per Adil's
+  // final call: "top" and "bottom" both use the original dashboard-
+  // configurable unit (300x250 by default), "reading" uses a fixed
+  // 468x60 unit — Adsterra suggested varying sizes by placement, but
+  // 320x50 read too small on both reading-page and bottom, so only
+  // the reading-page slot uses the second size.
+  //   "top"     — title/paginated-top slot, dashboard-configurable.
+  //   "reading" — every-9th-page slot in scroll mode, fixed 468x60.
+  //   "bottom"  — after the last page / paginated-bottom, same unit
+  //               as "top" (not a separate key/size).
   // Falls back to "top" sizing for any container with no/unrecognized
   // data-ad-slot, so nothing silently renders with width/height 0.
   function adsterraSlotConfig(slotType){
     if (slotType === 'reading') {
       return {
-        key: (siteConfig && siteConfig.adsterra_reading_key) || '7c0dc1f82bfbb0613c13d39c4a389759',
-        width: (siteConfig && siteConfig.adsterra_reading_width) || 320,
-        height: (siteConfig && siteConfig.adsterra_reading_height) || 50
-      };
-    }
-    if (slotType === 'bottom') {
-      return {
-        key: (siteConfig && siteConfig.adsterra_bottom_key) || '94062c42590ca5cc136b34dbc355d9c3',
-        width: (siteConfig && siteConfig.adsterra_bottom_width) || 468,
-        height: (siteConfig && siteConfig.adsterra_bottom_height) || 60
+        key: (siteConfig && siteConfig.adsterra_reading_key) || '94062c42590ca5cc136b34dbc355d9c3',
+        width: (siteConfig && siteConfig.adsterra_reading_width) || 468,
+        height: (siteConfig && siteConfig.adsterra_reading_height) || 60
       };
     }
     return {
