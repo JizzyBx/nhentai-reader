@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- READER_HTML_VERSION: 12 -->
+<!-- READER_HTML_VERSION: 13 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -423,16 +423,30 @@
   // sister site: inject a fresh div exactly when/where it's needed,
   // rather than pre-rendering several copies at once.
   // data-ad-slot on each container picks which Adsterra unit fills
-  // it — "top" (title/paginated slots, the original configurable
-  // 300x250), "reading" (every-9th-page slot in scroll mode, fixed
-  // 320x50), or "bottom" (after the last page / paginated bottom,
-  // fixed 468x60). Mondiad ignores this attribute entirely — it has
-  // only ever used one zone ID regardless of placement.
+  // it — "top" (title/paginated slots, dashboard-configurable
+  // 300x250), "reading" (reading-page slots in scroll mode, fixed
+  // 468x60, capped at MAX_READING_AD_SLOTS per comic), or "bottom"
+  // (after the last page / paginated bottom, fixed 160x300). Mondiad
+  // ignores this attribute entirely — it has only ever used one zone
+  // ID regardless of placement.
   let _adSlotCounter = 0;
   function adSlotHTML(slotType){
     const slotId = 'ad-slot-' + (_adSlotCounter++);
     return '<div class="ad-slot-container" id="' + slotId + '" data-ad-slot="' + slotType + '"></div>';
   }
+
+  // Hard cap on reading-page ad slots per comic, regardless of page
+  // count. Previously one slot was inserted every 9 pages with no
+  // ceiling, so a 54-page comic could carry 5+ reading slots on top
+  // of the top/bottom ones — Adsterra support (bot reply, ticket
+  // #134522818, 2026-09-19) recommended keeping total ads on one
+  // page around 4 max. With top + bottom fixed at 1 each, 3 is the
+  // most reading slots that still respects that ceiling for any
+  // comic length. Slots are spaced evenly through the comic (see
+  // renderScroll) rather than at a fixed page interval, so a
+  // short comic still gets fewer/no reading ads and a long one
+  // never exceeds this count.
+  const MAX_READING_AD_SLOTS = 3;
 
   // Ad network is chosen from the dashboard (site-config.json ->
   // ad_network: "mondiad" | "adsterra") and pushed through the same
@@ -487,16 +501,18 @@
     }
   }
 
-  // Two Adsterra banner units across three placements, per Adil's
-  // final call: "top" and "bottom" both use the original dashboard-
-  // configurable unit (300x250 by default), "reading" uses a fixed
-  // 468x60 unit — Adsterra suggested varying sizes by placement, but
-  // 320x50 read too small on both reading-page and bottom, so only
-  // the reading-page slot uses the second size.
-  //   "top"     — title/paginated-top slot, dashboard-configurable.
-  //   "reading" — every-9th-page slot in scroll mode, fixed 468x60.
-  //   "bottom"  — after the last page / paginated-bottom, same unit
-  //               as "top" (not a separate key/size).
+  // Three distinct Adsterra banner units, one per placement — no
+  // code is ever reused across two slot types, per Adsterra support
+  // (Lynn, ticket #134522818, 2026-09-19): "Please do not use each
+  // banner more than once." Session 4's second pass had violated
+  // this by sharing one code between "top" and "bottom"; fixed here.
+  //   "top"     — title/paginated-top slot, dashboard-configurable
+  //               (default 300x250).
+  //   "reading" — reading-page slots in scroll mode (max
+  //               MAX_READING_AD_SLOTS per comic, spaced through it —
+  //               see renderScroll), fixed 468x60.
+  //   "bottom"  — after the last page / paginated-bottom, fixed
+  //               160x300, its own separate unit.
   // Falls back to "top" sizing for any container with no/unrecognized
   // data-ad-slot, so nothing silently renders with width/height 0.
   function adsterraSlotConfig(slotType){
@@ -505,6 +521,13 @@
         key: (siteConfig && siteConfig.adsterra_reading_key) || '94062c42590ca5cc136b34dbc355d9c3',
         width: (siteConfig && siteConfig.adsterra_reading_width) || 468,
         height: (siteConfig && siteConfig.adsterra_reading_height) || 60
+      };
+    }
+    if (slotType === 'bottom') {
+      return {
+        key: (siteConfig && siteConfig.adsterra_bottom_key) || 'f976c980146a6599494febf8e79f5fd3',
+        width: (siteConfig && siteConfig.adsterra_bottom_width) || 160,
+        height: (siteConfig && siteConfig.adsterra_bottom_height) || 300
       };
     }
     return {
@@ -785,7 +808,23 @@
     // Ad right after title, before first page — top slot (300x250)
     html += adSlotHTML('top');
 
-    // Pages, with an ad slot every 9 pages — reading slot (320x50)
+    // Reading-page ad slots: evenly spaced through the comic, capped
+    // at MAX_READING_AD_SLOTS total regardless of page count (was
+    // "every 9th page" with no ceiling — a long comic could rack up
+    // far more than the ~4-ads-per-page Adsterra recommended). A
+    // short comic (fewer pages than would naturally fit
+    // MAX_READING_AD_SLOTS slots at a reasonable spacing) gets fewer
+    // slots, never more than the cap. Never places a slot on the
+    // very last page — that's the dedicated "bottom" slot's job.
+    const readingSlotCount = Math.min(MAX_READING_AD_SLOTS, Math.floor((images.length - 1) / 9));
+    const readingSlotPages = new Set();
+    if (readingSlotCount > 0) {
+      const interval = images.length / (readingSlotCount + 1);
+      for (let s = 1; s <= readingSlotCount; s++) {
+        readingSlotPages.add(Math.round(interval * s));
+      }
+    }
+
     images.forEach(function(src, i){
       const pageNum = i + 1;
       html += '<div class="page">';
@@ -793,13 +832,12 @@
       html += '<div class="page-num">' + pageNum + ' / ' + images.length + '</div>';
       html += '</div>';
 
-      // After every 9th page (but not immediately duplicating the end-ad if it's also the last page)
-      if (pageNum % 9 === 0 && pageNum !== images.length){
+      if (readingSlotPages.has(pageNum) && pageNum !== images.length){
         html += adSlotHTML('reading');
       }
     });
 
-    // Final ad after the last page — bottom slot (468x60)
+    // Final ad after the last page — bottom slot (160x300)
     html += adSlotHTML('bottom');
     html += '<div class="end-note">End of comic</div>';
 
