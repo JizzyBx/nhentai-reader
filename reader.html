@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- READER_HTML_VERSION: 13 -->
+<!-- READER_HTML_VERSION: 14 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -448,6 +448,71 @@
   // never exceeds this count.
   const MAX_READING_AD_SLOTS = 3;
 
+  // Smartlink monetization (Adsterra), scroll mode only — see
+  // HANDOFF.md for the full compliance reasoning (ticket #134522818,
+  // Daniel from Adsterra Publishers, 2026-09-20: same-user repeat
+  // clicks across different days are fine as long as they're organic,
+  // not bot/motivated/fraudulent traffic). Design constraints that
+  // shaped this, all from Adil directly:
+  //   - Paginated mode is deliberately excluded — tapping the image
+  //     there already turns pages; hijacking that tap to navigate
+  //     away would break the core reading interaction. Scroll mode's
+  //     page taps do nothing today, so this is a genuinely new,
+  //     non-conflicting behavior there.
+  //   - Fires on the FIRST tap on any page image, once per comic
+  //     (identified by its ?code=), once per calendar day — not more,
+  //     regardless of how many times that comic is re-tapped that same
+  //     day. Reading a *different* comic the same day fires again
+  //     (independent key). Reading the *same* comic again tomorrow
+  //     fires again (day resets it). This was Adil's own proposed
+  //     design, chosen specifically to stay unambiguously inside
+  //     "organic return traffic" — never a rate that could look
+  //     scripted or forced.
+  //   - Tags/artist links are explicitly excluded — comic page images
+  //     only.
+  //   - No auto-return after navigating to the smartlink — Adil's
+  //     explicit call. The user taps back in Telegram's in-app
+  //     WebView (confirmed single-tab, no multi-tab support) to
+  //     resume reading. No countdown page, no return-URL plumbing.
+  //   - Fully client-side (localStorage), no backend involved — fits
+  //     the free-tier/GitHub-Pages-only hosting constraint Adil
+  //     flagged; no server-side session storage exists to lean on.
+  //   - Gated entirely behind siteConfig.smartlink_enabled, a
+  //     dashboard kill switch defaulting to OFF. Checked fresh off
+  //     site-config.json on every page load, so toggling it in the
+  //     dashboard takes effect for every visitor on their very next
+  //     load — no version bump or reader.html redeploy needed, same
+  //     mechanism as the ad_network switch elsewhere in this file.
+  function maybeFireSmartlink(){
+    if (!siteConfig || !siteConfig.smartlink_enabled) return;
+    const url = siteConfig.smartlink_url;
+    if (!url) return; // enabled but no URL configured yet — no-op, not an error
+
+    const code = getCodeFromURL() || 'unknown';
+    const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD, local calendar day is fine here
+    const key = 'smartlink_' + code + '_' + today;
+
+    let alreadyFired = false;
+    try {
+      alreadyFired = !!window.localStorage.getItem(key);
+    } catch (e) {
+      // localStorage unavailable (private browsing lockdown, etc.) —
+      // fail safe by not firing, rather than risk firing on every tap.
+      return;
+    }
+    if (alreadyFired) return;
+
+    try {
+      window.localStorage.setItem(key, '1');
+    } catch (e) {
+      // If we can't persist the flag, don't fire — better to skip this
+      // one monetization moment than risk firing repeatedly all day.
+      return;
+    }
+
+    window.location.href = url;
+  }
+
   // Ad network is chosen from the dashboard (site-config.json ->
   // ad_network: "mondiad" | "adsterra") and pushed through the same
   // pipeline as branding. Whichever network is NOT active gets zero
@@ -843,6 +908,18 @@
 
     area.innerHTML = html;
     injectAdSlots();
+
+    // Smartlink: one listener per page image, all sharing the same
+    // maybeFireSmartlink() gate — only the first tap of the day across
+    // ALL of this comic's page images actually navigates anywhere;
+    // every tap after that (this comic, today) is a silent no-op, same
+    // as before this feature existed. Attached here (after
+    // area.innerHTML is set) rather than via event delegation on
+    // `area`, since these <img> elements are static once rendered —
+    // no need for delegation's extra indirection.
+    area.querySelectorAll('.page img').forEach(function(img){
+      img.addEventListener('click', maybeFireSmartlink);
+    });
   }
 
   // ---------- Paginated mode ----------
