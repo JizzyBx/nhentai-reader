@@ -40,6 +40,6 @@
   "adsterra_bottom_width": 160,
   "adsterra_bottom_height": 300,
   "paginated_mode_enabled": true,
-  "smartlink_enabled": true,
+  "smartlink_enabled": false,
   "smartlink_url": "https://adeptdoorstep.com/f32wwzkgrw?key=9b8195c2767bfd2db73682c2c9b232b6"
 }
