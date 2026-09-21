@@ -33,5 +33,13 @@
   "adsterra_key": "",
   "adsterra_width": 300,
   "adsterra_height": 250,
-  "paginated_mode_enabled": true
+  "adsterra_reading_key": "94062c42590ca5cc136b34dbc355d9c3",
+  "adsterra_reading_width": 468,
+  "adsterra_reading_height": 60,
+  "adsterra_bottom_key": "f976c980146a6599494febf8e79f5fd3",
+  "adsterra_bottom_width": 160,
+  "adsterra_bottom_height": 300,
+  "paginated_mode_enabled": true,
+  "smartlink_enabled": true,
+  "smartlink_url": "https://adeptdoorstep.com/f32wwzkgrw?key=9b8195c2767bfd2db73682c2c9b232b6"
 }

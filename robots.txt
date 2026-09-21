@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://jizzybx.github.io/nhentai-reader/sitemap.xml
