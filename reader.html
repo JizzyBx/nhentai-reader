@@ -1,10 +1,12 @@
 <!DOCTYPE html>
-<!-- READER_HTML_VERSION: 15 -->
+<!-- READER_HTML_VERSION: 16 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
 <title>Reader</title>
+<meta name="rating" content="adult">
+<meta name="RTA" content="RTA-5042-1996-1400-1577-RTA">
 
 <!-- Mondiad banner ad script -->
 <!-- banner.js is loaded dynamically in JS, after ad divs exist —
@@ -1109,6 +1111,107 @@
   }
 
   init();
+})();
+</script>
+
+<!-- ============================================================
+     18+ AGE GATE — overlay only.
+     - Sits ON TOP of the page. Comic content/HTML underneath is untouched,
+       so nothing is hidden from search engines.
+     - No redirect, no URL change. ?code= handling is not involved.
+     - Remembered per browser in localStorage under its own key
+       ('ageGateOk_v1') — does not touch 'readingMode' or ad keys.
+     - Search-engine crawlers are detected and never shown the gate.
+     - "Leave" only navigates on a real human click.
+     ============================================================ -->
+<style>
+  #ageGate{
+    position:fixed; inset:0; z-index:2147483000;
+    background:rgba(10,11,14,.97);
+    display:none; align-items:center; justify-content:center;
+    padding:20px; font-family:inherit;
+  }
+  #ageGate.show{ display:flex; }
+  #ageGate .ag-box{
+    width:100%; max-width:380px; text-align:center;
+    background:#1d1f26; border:1px solid #2a2d36; border-radius:18px;
+    padding:28px 22px; color:#e8e8ec;
+    box-shadow:0 20px 60px rgba(0,0,0,.6);
+  }
+  #ageGate .ag-badge{
+    display:inline-block; font-size:34px; font-weight:800; color:#ff5a7a;
+    border:3px solid #ff5a7a; border-radius:14px; padding:4px 16px; margin-bottom:14px;
+  }
+  #ageGate h2{ margin:0 0 8px; font-size:20px; }
+  #ageGate p{ margin:0 0 20px; font-size:14px; line-height:1.5; color:#8b8d98; }
+  #ageGate .ag-btns{ display:flex; flex-direction:column; gap:10px; }
+  #ageGate button{
+    border:0; border-radius:12px; padding:14px 16px; font-size:16px;
+    font-weight:700; cursor:pointer; font-family:inherit;
+  }
+  #ageGate .ag-yes{ background:#ff5a7a; color:#fff; }
+  #ageGate .ag-no { background:#2a2d36; color:#e8e8ec; }
+  #ageGate .ag-small{ margin-top:16px; font-size:11px; color:#6b6d78; }
+  #ageGate .ag-small a{ color:#8b8d98; }
+  .site-legal-links{
+    text-align:center; font-size:12px; color:#6b6d78; padding:18px 12px 28px;
+  }
+  .site-legal-links a{ color:#8b8d98; margin:0 8px; text-decoration:underline; }
+</style>
+
+<div id="ageGate" role="dialog" aria-modal="true" aria-labelledby="agTitle">
+  <div class="ag-box">
+    <div class="ag-badge">18+</div>
+    <h2 id="agTitle">Adults only</h2>
+    <p>This website contains adult content. You must be 18 years or older to enter.</p>
+    <div class="ag-btns">
+      <button type="button" class="ag-yes" id="agYes">Yes, I'm 18 or older</button>
+      <button type="button" class="ag-no"  id="agNo">Leave</button>
+    </div>
+    <div class="ag-small">
+      By entering you confirm you are of legal age where you live.
+      <a href="dmca.html">DMCA</a> · <a href="2257.html">2257</a>
+    </div>
+  </div>
+</div>
+
+<div class="site-legal-links">
+  <a href="dmca.html">DMCA</a> · <a href="2257.html">18 U.S.C. 2257</a>
+</div>
+
+<script>
+(function(){
+  var KEY = 'ageGateOk_v1';
+  var LEAVE_URL = 'https://t.me/ArcComic';   // <-- where "Leave" sends people
+
+  // Search-engine / preview crawlers never see the gate.
+  var ua = (navigator.userAgent || '');
+  var isBot = /googlebot|bingbot|slurp|duckduckbot|baiduspider|yandex|sogou|exabot|facebot|ia_archiver|applebot|petalbot|semrush|ahrefs|mj12bot|telegrambot|twitterbot|whatsapp|discordbot/i.test(ua);
+  if (isBot) return;
+
+  var gate = document.getElementById('ageGate');
+  if (!gate) return;
+
+  var ok = false;
+  try { ok = window.localStorage.getItem(KEY) === '1'; } catch(e) { ok = false; }
+  if (ok) return;                       // already verified on this browser
+
+  gate.classList.add('show');
+  document.documentElement.style.overflow = 'hidden';   // stop background scroll while gate is up
+
+  function closeGate(){
+    gate.classList.remove('show');
+    document.documentElement.style.overflow = '';
+  }
+
+  document.getElementById('agYes').addEventListener('click', function(){
+    try { window.localStorage.setItem(KEY, '1'); } catch(e) {}
+    closeGate();
+  });
+
+  document.getElementById('agNo').addEventListener('click', function(){
+    window.location.href = LEAVE_URL;    // only on a real click
+  });
 })();
 </script>
 
