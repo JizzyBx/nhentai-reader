@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Adsterra test</title>
+<style>
+  body{font-family:Arial,sans-serif;margin:0;padding:12px;background:#fff;color:#111}
+  h3{margin:18px 0 6px;font-size:15px}
+  .box{margin:0 auto;background:#eee;border:1px dashed #999;position:relative}
+  .b300{width:300px;height:250px}
+  .b468{width:468px;max-width:100%;height:60px}
+  .b160{width:160px;height:300px}
+  #log{white-space:pre-wrap;font:12px/1.4 monospace;background:#111;color:#0f0;padding:10px;margin-top:16px;border-radius:6px}
+</style>
+</head>
+<body>
+
+<h3>TEST 1: Banner 300x250 (Adsterra snippet exactly as given, plain page)</h3>
+<div class="box b300" id="t1">
+  <script>atOptions={'key':'f497c72eaa4ac3c75ebd648cab373c98','format':'iframe','height':250,'width':300,'params':{}};</script>
+  <script src="https://adeptdoorstep.com/f497c72eaa4ac3c75ebd648cab373c98/invoke.js"></script>
+</div>
+
+<h3>TEST 2: Same banner loaded from JavaScript (how reader.html does it)</h3>
+<div class="box b300" id="t2"></div>
+
+<div id="log">Loading... wait about 10 seconds, then scroll down for results.</div>
+
+<script>
+var L=document.getElementById('log');
+function log(m){L.textContent+="\n"+m}
+L.textContent="Results:";
+
+// Test 2: dynamic injection, same as reader.html
+(function(){
+  window.atOptions={'key':'f497c72eaa4ac3c75ebd648cab373c98','format':'iframe','height':250,'width':300,'params':{}};
+  var s=document.createElement('script');
+  s.async=true;
+  s.src='https://adeptdoorstep.com/f497c72eaa4ac3c75ebd648cab373c98/invoke.js';
+  s.onload=function(){log("T2 script onload: OK")};
+  s.onerror=function(){log("T2 script onerror: FAILED TO LOAD (blocked or network)")};
+  document.getElementById('t2').appendChild(s);
+})();
+
+setTimeout(function(){
+  var r=[];
+  ['t1','t2'].forEach(function(id){
+    var el=document.getElementById(id);
+    var ifr=el.querySelectorAll('iframe').length;
+    var kids=el.children.length;
+    var h=el.offsetHeight;
+    r.push(id+": iframes="+ifr+", child elements="+kids+", box height="+h+"px");
+  });
+  log(r.join("\n"));
+  log("Total iframes on page: "+document.querySelectorAll('iframe').length);
+  log("Page URL: "+location.href);
+  log("Browser: "+navigator.userAgent);
+},10000);
+</script>
+</body>
+</html>
