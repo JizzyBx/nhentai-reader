@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- READER_HTML_VERSION: 16 -->
+<!-- READER_HTML_VERSION: 17 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -448,9 +448,9 @@
   // renderScroll) rather than at a fixed page interval, so a
   // short comic still gets fewer/no reading ads and a long one
   // never exceeds this count.
-  const MAX_READING_AD_SLOTS = 3;
+  const MAX_READING_AD_SLOTS = 3;  // Mondiad path only; Hilltop uses exactly 1 (see renderScroll)
 
-  // Smartlink monetization (Adsterra), scroll mode only — see
+  // Tap-link monetization (any network's direct link), scroll mode only — see
   // HANDOFF.md for the full compliance reasoning (ticket #134522818,
   // Daniel from Adsterra Publishers, 2026-09-20: same-user repeat
   // clicks across different days are fine as long as they're organic,
@@ -490,25 +490,18 @@
     const url = siteConfig.smartlink_url;
     if (!url) return; // enabled but no URL configured yet — no-op, not an error
 
-    const code = getCodeFromURL() || 'unknown';
-    const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD, local calendar day is fine here
-    const key = 'smartlink_' + code + '_' + today;
-
-    let alreadyFired = false;
-    try {
-      alreadyFired = !!window.localStorage.getItem(key);
-    } catch (e) {
-      // localStorage unavailable (private browsing lockdown, etc.) —
-      // fail safe by not firing, rather than risk firing on every tap.
-      return;
-    }
-    if (alreadyFired) return;
+    // Once per HOUR per visitor (all comics share one timer) — not per
+    // comic per day. Stored client-side only; if storage is unavailable we
+    // fail safe by NOT firing rather than risk firing on every tap.
+    const key = 'tapLink_lastFired';
+    const HOUR_MS = 60 * 60 * 1000;
+    const now = Date.now();
 
     try {
-      window.localStorage.setItem(key, '1');
+      const last = parseInt(window.localStorage.getItem(key) || '0', 10);
+      if (last && (now - last) < HOUR_MS) return;
+      window.localStorage.setItem(key, String(now));
     } catch (e) {
-      // If we can't persist the flag, don't fire — better to skip this
-      // one monetization moment than risk firing repeatedly all day.
       return;
     }
 
@@ -516,7 +509,7 @@
   }
 
   // Ad network is chosen from the dashboard (site-config.json ->
-  // ad_network: "mondiad" | "adsterra") and pushed through the same
+  // ad_network: "mondiad" | "hilltop") and pushed through the same
   // pipeline as branding. Whichever network is NOT active gets zero
   // script tags, zero divs, zero network calls — no leftover/dead
   // fill attempts from the inactive network.
@@ -526,8 +519,8 @@
 
     const network = (siteConfig && siteConfig.ad_network) || 'mondiad';
 
-    if (network === 'adsterra') {
-      injectAdsterraSlots(containers);
+    if (network === 'hilltop') {
+      injectHilltopSlots(containers);
     } else {
       injectMondiadSlots(containers);
     }
@@ -568,92 +561,39 @@
     }
   }
 
-  // Three distinct Adsterra banner units, one per placement — no
-  // code is ever reused across two slot types, per Adsterra support
-  // (Lynn, ticket #134522818, 2026-09-19): "Please do not use each
-  // banner more than once." Session 4's second pass had violated
-  // this by sharing one code between "top" and "bottom"; fixed here.
-  //   "top"     — title/paginated-top slot, dashboard-configurable
-  //               (default 300x250).
-  //   "reading" — reading-page slots in scroll mode (max
-  //               MAX_READING_AD_SLOTS per comic, spaced through it —
-  //               see renderScroll), fixed 468x60.
-  //   "bottom"  — after the last page / paginated-bottom, fixed
-  //               160x300, its own separate unit.
-  // Falls back to "top" sizing for any container with no/unrecognized
-  // data-ad-slot, so nothing silently renders with width/height 0.
-  function adsterraSlotConfig(slotType){
-    if (slotType === 'reading') {
-      return {
-        key: (siteConfig && siteConfig.adsterra_reading_key) || '94062c42590ca5cc136b34dbc355d9c3',
-        width: (siteConfig && siteConfig.adsterra_reading_width) || 468,
-        height: (siteConfig && siteConfig.adsterra_reading_height) || 60
-      };
-    }
-    if (slotType === 'bottom') {
-      return {
-        key: (siteConfig && siteConfig.adsterra_bottom_key) || 'f976c980146a6599494febf8e79f5fd3',
-        width: (siteConfig && siteConfig.adsterra_bottom_width) || 160,
-        height: (siteConfig && siteConfig.adsterra_bottom_height) || 300
-      };
-    }
-    return {
-      key: (siteConfig && siteConfig.adsterra_key) || 'f497c72eaa4ac3c75ebd648cab373c98',
-      width: (siteConfig && siteConfig.adsterra_width) || 300,
-      height: (siteConfig && siteConfig.adsterra_height) || 250
-    };
+  // Hilltop MultiTag banners — one zone per placement, never reused
+  // across two slots. Each zone's script inserts its banner right
+  // before its own <script> tag, so every script is appended INSIDE
+  // its slot container. Zone paths are the ones generated by the
+  // Hilltop dashboard (zone "Arc Reading page"); they can be
+  // overridden from the dashboard via site-config.json.
+  //   "top"     — title slot (scroll) / top of stage (paginated)
+  //   "reading" — the single in-comic slot after page 9 (scroll mode)
+  //   "bottom"  — after the last page (scroll) / below the nav (paginated)
+  const HILLTOP_DEFAULTS = {
+    top:     '//juvenilechoice.com/bYX-V.sEdgGxlk0bYmWAcZ/remmp9QuoZdUClnkCPwTbcKy_M_D/AQzJO/DyU/t/N/zqIOwPMrD/MW4HOaQe',
+    reading: '//juvenilechoice.com/bCXaVhsGd.G/lJ0-YTWkct/heKmy9EuyZ/UDlQksPnTlcDyYMCDrA/zINejWkGt/N/zjIVw/MgD/MB3DMdwR',
+    bottom:  '//juvenilechoice.com/b.XxVUsFdBGclq0/YcWUcT/ue/mG9Iu_ZaUulzkDPsTEcDxIOgTYYf1aNVjxkmt/N/zxEz5TNPjdUU3VMFwQ'
+  };
+
+  function hilltopSrc(slotType){
+    const t = (slotType === 'reading' || slotType === 'bottom') ? slotType : 'top';
+    const override = siteConfig && siteConfig['hilltop_' + t + '_src'];
+    return override || HILLTOP_DEFAULTS[t];
   }
 
-  // Adsterra's "invoke.js" banner format is not a div-scan like
-  // Mondiad's — it reads a single global `atOptions` object at the
-  // moment it executes, then document.writes/injects one iframe
-  // where its <script> tag sits. That means each slot needs the
-  // global set immediately before its own invoke.js load, and each
-  // slot needs its own <script src="invoke.js"> — a single shared
-  // load only ever fills the first slot. Slots are filled in
-  // sequence (each invoke.js load awaited before starting the next)
-  // so no slot overwrites another slot's still-pending atOptions —
-  // this matters even more now that different slots can carry
-  // different keys/sizes, not just different placements of one ad.
-  function injectAdsterraSlots(containers){
-    let i = 0;
-    const list = Array.prototype.slice.call(containers);
-
-    function loadNext(){
-      if (i >= list.length) return;
-      const container = list[i++];
-      const cfg = adsterraSlotConfig(container.getAttribute('data-ad-slot'));
-
-      // Adsterra's invoke.js expects a fixed-size box to write its
-      // iframe into — give each container an explicit size matching
-      // atOptions so the layout doesn't jump once the ad loads.
-      // margin: 0 auto centers this fixed-width box within its
-      // full-width parent row — without this it sits flush left,
-      // since a fixed-width block element doesn't auto-center on
-      // its own even inside a flex/centered parent.
-      container.style.width = cfg.width + 'px';
-      container.style.height = cfg.height + 'px';
-      container.style.margin = '0 auto';
-
-      window.atOptions = {
-        'key': cfg.key,
-        'format': 'iframe',
-        'height': cfg.height,
-        'width': cfg.width,
-        'params': {}
-      };
+  function injectHilltopSlots(containers){
+    Array.prototype.forEach.call(containers, function(container){
+      // A slot that already holds a Hilltop script is never filled twice.
+      if (container.getAttribute('data-hilltop-loaded') === '1') return;
+      container.setAttribute('data-hilltop-loaded', '1');
 
       const script = document.createElement('script');
-      // Adsterra anti-adblock domain (approved 2026-09-21). Old domain was
-      // www.highrevenueformat.com — same key/path, only the host changed.
-      script.src = 'https://adeptdoorstep.com/' + cfg.key + '/invoke.js';
       script.async = true;
-      script.onload = loadNext;
-      script.onerror = loadNext; // don't let one bad slot block the rest
+      script.referrerPolicy = 'no-referrer-when-downgrade';
+      script.src = hilltopSrc(container.getAttribute('data-ad-slot'));
       container.appendChild(script);
-    }
-
-    loadNext();
+    });
   }
 
   function getCodeFromURL(){
@@ -885,12 +825,20 @@
     // MAX_READING_AD_SLOTS slots at a reasonable spacing) gets fewer
     // slots, never more than the cap. Never places a slot on the
     // very last page — that's the dedicated "bottom" slot's job.
-    const readingSlotCount = Math.min(MAX_READING_AD_SLOTS, Math.floor((images.length - 1) / 9));
+    const _hilltop = (siteConfig && siteConfig.ad_network) === 'hilltop';
+    // Hilltop: exactly ONE reading banner, placed after page 9 (needs a comic longer than 9 pages).
+    const readingSlotCount = _hilltop
+      ? (images.length > 9 ? 1 : 0)
+      : Math.min(MAX_READING_AD_SLOTS, Math.floor((images.length - 1) / 9));
     const readingSlotPages = new Set();
     if (readingSlotCount > 0) {
-      const interval = images.length / (readingSlotCount + 1);
-      for (let s = 1; s <= readingSlotCount; s++) {
-        readingSlotPages.add(Math.round(interval * s));
+      if (_hilltop) {
+        readingSlotPages.add(9);   // one ad inside the comic, after page 9
+      } else {
+        const interval = images.length / (readingSlotCount + 1);
+        for (let s = 1; s <= readingSlotCount; s++) {
+          readingSlotPages.add(Math.round(interval * s));
+        }
       }
     }
 
@@ -1024,7 +972,12 @@
     _pgTurnCount++;
     if (_pgTurnCount >= PAGINATED_AD_REFRESH_EVERY){
       _pgTurnCount = 0;
-      refreshAdSlots(document.querySelectorAll('#pgAdTop, #pgAdBottom'));
+      // Hilltop MultiTag banners are single-load scripts: re-injecting the
+      // same zone code repeatedly would stack duplicate loads. Only Mondiad
+      // gets the periodic in-place refresh.
+      if (!(siteConfig && siteConfig.ad_network === 'hilltop')) {
+        refreshAdSlots(document.querySelectorAll('#pgAdTop, #pgAdBottom'));
+      }
     }
   }
 
