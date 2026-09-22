@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- READER_HTML_VERSION: 21 -->
+<!-- READER_HTML_VERSION: 22 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -638,21 +638,51 @@
   }
 
   let _clickadillaScriptLoaded = false;
-  function ensureClickAdillaScript(){
-    if (_clickadillaScriptLoaded) return;
-    _clickadillaScriptLoaded = true;
-
-    if (siteConfig && siteConfig.clickadilla_anti_adblock) {
-      loadClickAdillaAntiAdBlockScript();
-      return;
-    }
-
+  function loadClickAdillaBaseScript(){
+    // Remove any previous adManager.js tag before reloading — avoids
+    // stacking duplicate <script> elements in <head> across repeated
+    // mode-switches / paginated-mode refreshes over a long session.
+    document.querySelectorAll('script[data-clickadilla-loader="1"]').forEach(function(old){
+      old.remove();
+    });
     const admpid = (siteConfig && siteConfig.clickadilla_admpid) || CLICKADILLA_ADMPID;
     const s = document.createElement('script');
     s.async = true;
     s.src = 'https://js.wpadmngr.com/static/adManager.js';
     s.setAttribute('data-admpid', admpid);
+    s.setAttribute('data-clickadilla-loader', '1');
     document.head.appendChild(s);
+  }
+
+  // Unlike Mondiad's banner.js, ClickAdilla's adManager.js only scans the
+  // page for data-banner-id divs ONCE, when it first loads — it does not
+  // keep watching for new ones. That's fine for the very first render
+  // (divs exist before the script is added), but breaks on anything that
+  // creates NEW banner divs afterward: switching scroll<->paginated mode,
+  // and paginated mode's periodic ad refresh. Both of those need a script
+  // reload, not just new divs, or the new divs sit empty forever. This
+  // mirrors the same reasoning injectMondiadSlots() uses, just applied
+  // correctly for how ClickAdilla's script actually behaves (confirmed by
+  // Adil reporting empty banners after a mode switch and after paginated
+  // mode's refresh — verified against real behavior, not assumed).
+  function ensureClickAdillaScript(forceReload){
+    if (_clickadillaScriptLoaded && !forceReload) return;
+    _clickadillaScriptLoaded = true;
+
+    if (siteConfig && siteConfig.clickadilla_anti_adblock) {
+      // NOTE: unlike loadClickAdillaBaseScript() above, this doesn't clean
+      // up prior script tags before reloading — it's ClickAdilla's own
+      // generated/obfuscated loader, left untouched rather than risking
+      // breaking it by editing its internals. Repeated reloads (mode
+      // switches, paginated refresh) will each add their own tag; low
+      // real-world impact, but a long single-session paginated read could
+      // accumulate several. Worth asking ClickAdilla support about if it
+      // ever becomes a visible problem.
+      loadClickAdillaAntiAdBlockScript();
+      return;
+    }
+
+    loadClickAdillaBaseScript();
   }
 
   // Verbatim from ClickAdilla's dashboard "Anti AdBlock" -> "Add Anti
@@ -724,16 +754,15 @@
   }
 
   function injectClickAdillaSlots(containers){
-    // Script loaded once, after every banner div below already exists —
-    // same reasoning as Mondiad's injectMondiadSlots(): sidesteps needing
-    // to know whether adManager.js exposes a manual re-scan method by
-    // ensuring its first scan always finds the divs already in place.
+    // Every call means fresh data-banner-id divs were just created —
+    // force a script reload every time (see ensureClickAdillaScript's
+    // comment above for why this can't just load once).
     Array.prototype.forEach.call(containers, function(container){
       const div = document.createElement('div');
       div.setAttribute('data-banner-id', clickadillaBannerId(container.getAttribute('data-ad-slot')));
       container.appendChild(div);
     });
-    ensureClickAdillaScript();
+    ensureClickAdillaScript(true);
   }
 
   function getCodeFromURL(){
