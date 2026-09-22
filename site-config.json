@@ -29,14 +29,14 @@
       "url": "https://x.com/ArcComicDaily"
     }
   ],
-  "ad_network": "hilltop",
+  "ad_network": "clickadilla",
   "multi_network_rotation_enabled": true,
   "network_priority": {
-    "mondiad": 3,
-    "hilltop": 2,
-    "clickadilla": 1
+    "mondiad": 1,
+    "hilltop": 3,
+    "clickadilla": 2
   },
-  "clickadilla_anti_adblock": true,
+  "clickadilla_anti_adblock": false,
   "paginated_mode_enabled": true,
   "smartlink_enabled": false,
   "smartlink_url": "",
