@@ -30,7 +30,7 @@
     }
   ],
   "ad_network": "exoclick",
-  "exoclick_interstitial_enabled": false,
+  "exoclick_interstitial_enabled": true,
   "paginated_mode_enabled": true,
   "smartlink_enabled": false,
   "smartlink_url": "",
