@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- READER_HTML_VERSION: 23 -->
+<!-- READER_HTML_VERSION: 24 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -624,16 +624,32 @@
     return rest;
   }
 
-  // Full block-ownership sequence: the selected network gets the first
-  // TWO blocks, then every other network gets exactly one block each, in
-  // priority order, then the whole sequence repeats. e.g. selected =
-  // clickadilla, priorities mondiad:3 hilltop:2 -> [clickadilla,
-  // clickadilla, hilltop, mondiad], repeating. This (not a flat 1-each
-  // round robin) is Adil's explicit spec — the selected/active network is
-  // meant to still dominate, priority only governs who fills in behind it.
+  // Full block-ownership sequence: the selected network normally gets the
+  // first TWO blocks, then every other network gets exactly one block
+  // each, in priority order, then the whole sequence repeats. e.g.
+  // selected = clickadilla, priorities mondiad:3 hilltop:2 ->
+  // [clickadilla, clickadilla, hilltop, mondiad], repeating. This (not a
+  // flat 1-each round robin) is Adil's explicit spec — the selected/
+  // active network is meant to still dominate, priority only governs who
+  // fills in behind it.
+  //
+  // EXCEPTION: Hilltop only ever gets ONE slot in this sequence, even
+  // when it's the selected network. Hilltop has exactly one "reading"
+  // zone URL (see HILLTOP_DEFAULTS) — giving it two blocks on the same
+  // page means the second block reuses that same zone code, which
+  // Hilltop simply returns blank fill for (their own "never reused
+  // across two slots" rule, same reasoning as this file's original
+  // pre-rotation Hilltop handling). Confirmed live by Adil: a blank slot
+  // costs real revenue and looks broken to readers, so Hilltop hands off
+  // to the next-priority network immediately after its one slot rather
+  // than holding a second slot it can't actually fill. Every other
+  // network is unaffected — they still get their full two blocks when
+  // selected, since Mondiad/ClickAdilla's scripts re-scan for banner
+  // divs and don't have this one-zone-per-page restriction.
   function rotationBlockSequence(){
     const selected = (siteConfig && siteConfig.ad_network) || 'mondiad';
-    return [selected, selected].concat(rotationHandoffOrder());
+    const selectedBlocks = (selected === 'hilltop') ? [selected] : [selected, selected];
+    return selectedBlocks.concat(rotationHandoffOrder());
   }
 
   // blockIndex is 0-based (0 = first reading-slot block encountered).
