@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- READER_HTML_VERSION: 17 -->
+<!-- READER_HTML_VERSION: 18 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -490,11 +490,14 @@
     const url = siteConfig.smartlink_url;
     if (!url) return; // enabled but no URL configured yet — no-op, not an error
 
-    // Once per HOUR per visitor (all comics share one timer) — not per
-    // comic per day. Stored client-side only; if storage is unavailable we
+    // Once per N HOURS per visitor (all comics share one timer) — N is
+    // set from the dashboard (site_config.smartlink_hours), default 1 if
+    // unset/invalid. Stored client-side only; if storage is unavailable we
     // fail safe by NOT firing rather than risk firing on every tap.
     const key = 'tapLink_lastFired';
-    const HOUR_MS = 60 * 60 * 1000;
+    const hours = (siteConfig && Number(siteConfig.smartlink_hours) > 0)
+      ? Number(siteConfig.smartlink_hours) : 1;
+    const HOUR_MS = hours * 60 * 60 * 1000;
     const now = Date.now();
 
     try {
@@ -509,7 +512,7 @@
   }
 
   // Ad network is chosen from the dashboard (site-config.json ->
-  // ad_network: "mondiad" | "hilltop") and pushed through the same
+  // ad_network: "mondiad" | "hilltop" | "exoclick") and pushed through the same
   // pipeline as branding. Whichever network is NOT active gets zero
   // script tags, zero divs, zero network calls — no leftover/dead
   // fill attempts from the inactive network.
@@ -518,9 +521,12 @@
     if (containers.length === 0) return;
 
     const network = (siteConfig && siteConfig.ad_network) || 'mondiad';
+    if (network === 'exoclick') maybeLoadExoClickInterstitial();
 
     if (network === 'hilltop') {
       injectHilltopSlots(containers);
+    } else if (network === 'exoclick') {
+      injectExoClickSlots(containers);
     } else {
       injectMondiadSlots(containers);
     }
@@ -594,6 +600,91 @@
       script.src = hilltopSrc(container.getAttribute('data-ad-slot'));
       container.appendChild(script);
     });
+  }
+
+  // ExoClick banners — same single-load-per-zone approach as Hilltop:
+  // each zone's <ins class="easXXXX" data-zoneid="..."> + AdProvider.push()
+  // is only ever pushed once per container. Zone IDs match the "Arccomicpage"
+  // site created in ExoClick's dashboard; overridable via site-config.json.
+  //   top     -> zone 6036124
+  //   reading -> zone 6036130 (the single in-comic slot after page 9)
+  //   bottom  -> zone 6036132
+  const EXOCLICK_DEFAULTS = {
+    top:     { cls: 'eas6a97888e2', zone: '6036124' },
+    reading: { cls: 'eas6a97888e2', zone: '6036130' },
+    bottom:  { cls: 'eas6a97888e2', zone: '6036132' }
+  };
+
+  function exoclickCfg(slotType){
+    const t = (slotType === 'reading' || slotType === 'bottom') ? slotType : 'top';
+    const override = siteConfig && siteConfig['exoclick_' + t + '_zone'];
+    return override
+      ? { cls: EXOCLICK_DEFAULTS[t].cls, zone: String(override) }
+      : EXOCLICK_DEFAULTS[t];
+  }
+
+  let _exoProviderLoaded = false;
+  function ensureExoClickProvider(){
+    if (_exoProviderLoaded) return;
+    _exoProviderLoaded = true;
+    const s = document.createElement('script');
+    s.async = true;
+    s.type = 'application/javascript';
+    s.src = 'https://a.magsrv.com/ad-provider.js';
+    document.head.appendChild(s);
+  }
+
+  function injectExoClickSlots(containers){
+    ensureExoClickProvider();
+    Array.prototype.forEach.call(containers, function(container){
+      if (container.getAttribute('data-exoclick-loaded') === '1') return;
+      container.setAttribute('data-exoclick-loaded', '1');
+
+      const cfg = exoclickCfg(container.getAttribute('data-ad-slot'));
+      const ins = document.createElement('ins');
+      ins.className = cfg.cls;
+      ins.setAttribute('data-zoneid', cfg.zone);
+      container.appendChild(ins);
+
+      // AdProvider.push() must run AFTER ad-provider.js has loaded; queueing
+      // is safe even before it loads because AdProvider is initialised as []
+      // the first time ensureExoClickProvider() runs, same pattern ExoClick's
+      // own snippet uses (window.AdProvider = window.AdProvider || []).
+      window.AdProvider = window.AdProvider || [];
+      window.AdProvider.push({ serve: {} });
+    });
+  }
+
+  // ExoClick Mobile Fullpage Interstitial — a single site-wide script,
+  // loaded once, NOT per ad slot. Its own trigger (clicking .tag-chip or
+  // .follow-card links) and its own 24h frequency cap are both configured
+  // inside ExoClick's dashboard on the zone itself; this only controls
+  // whether the script is present on the page at all. OFF by default —
+  // Adil's call: user experience over ad revenue.
+  let _exoInterstitialLoaded = false;
+  function maybeLoadExoClickInterstitial(){
+    if (_exoInterstitialLoaded) return;
+    if (!siteConfig || siteConfig.ad_network !== 'exoclick') return;
+    if (!siteConfig.exoclick_interstitial_enabled) return;
+    _exoInterstitialLoaded = true;
+
+    const src = siteConfig.exoclick_interstitial_src || 'https://a.pemsrv.com/ad-provider.js';
+    const zoneCls = siteConfig.exoclick_interstitial_cls || 'eas6a97888e33';
+    const zoneId  = siteConfig.exoclick_interstitial_zone || '6036138';
+
+    const s = document.createElement('script');
+    s.async = true;
+    s.type = 'application/javascript';
+    s.src = src;
+    document.head.appendChild(s);
+
+    const ins = document.createElement('ins');
+    ins.className = zoneCls;
+    ins.setAttribute('data-zoneid', zoneId);
+    document.body.appendChild(ins);
+
+    window.AdProvider = window.AdProvider || [];
+    window.AdProvider.push({ serve: {} });
   }
 
   function getCodeFromURL(){
@@ -825,7 +916,12 @@
     // MAX_READING_AD_SLOTS slots at a reasonable spacing) gets fewer
     // slots, never more than the cap. Never places a slot on the
     // very last page — that's the dedicated "bottom" slot's job.
-    const _hilltop = (siteConfig && siteConfig.ad_network) === 'hilltop';
+    // ExoClick has the exact same one-zone-per-placement constraint as
+    // Hilltop (single-load MultiTag/AdProvider scripts), so it follows
+    // the same single-reading-slot-at-page-9 rule, not Mondiad's
+    // multi-slot-spread-across-the-comic behavior.
+    const _net = siteConfig && siteConfig.ad_network;
+    const _hilltop = (_net === 'hilltop' || _net === 'exoclick');
     // Hilltop: exactly ONE reading banner, placed after page 9 (needs a comic longer than 9 pages).
     const readingSlotCount = _hilltop
       ? (images.length > 9 ? 1 : 0)
@@ -975,7 +1071,8 @@
       // Hilltop MultiTag banners are single-load scripts: re-injecting the
       // same zone code repeatedly would stack duplicate loads. Only Mondiad
       // gets the periodic in-place refresh.
-      if (!(siteConfig && siteConfig.ad_network === 'hilltop')) {
+      const _net = siteConfig && siteConfig.ad_network;
+      if (_net !== 'hilltop' && _net !== 'exoclick') {
         refreshAdSlots(document.querySelectorAll('#pgAdTop, #pgAdBottom'));
       }
     }
