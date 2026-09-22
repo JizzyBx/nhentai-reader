@@ -29,8 +29,8 @@
       "url": "https://x.com/ArcComicDaily"
     }
   ],
-  "ad_network": "mondiad",
-  "exoclick_interstitial_enabled": true,
+  "ad_network": "hilltop",
+  "exoclick_interstitial_enabled": false,
   "paginated_mode_enabled": true,
   "smartlink_enabled": false,
   "smartlink_url": "",
