@@ -29,7 +29,7 @@
       "url": "https://x.com/ArcComicDaily"
     }
   ],
-  "ad_network": "exoclick",
+  "ad_network": "mondiad",
   "exoclick_interstitial_enabled": true,
   "paginated_mode_enabled": true,
   "smartlink_enabled": false,
