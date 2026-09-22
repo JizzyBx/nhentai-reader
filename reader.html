@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- READER_HTML_VERSION: 19 -->
+<!-- READER_HTML_VERSION: 20 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -871,33 +871,24 @@
     // Ad right after title, before first page — top slot (300x250)
     html += adSlotHTML('top');
 
-    // Reading-page ad slots: evenly spaced through the comic, capped
-    // at MAX_READING_AD_SLOTS total regardless of page count (was
-    // "every 9th page" with no ceiling — a long comic could rack up
-    // far more than the ~4-ads-per-page Adsterra recommended). A
-    // short comic (fewer pages than would naturally fit
-    // MAX_READING_AD_SLOTS slots at a reasonable spacing) gets fewer
-    // slots, never more than the cap. Never places a slot on the
+    // Reading-page ad slots: placed every 9th page (9, 18, 27...), capped
+    // at MAX_READING_AD_SLOTS total regardless of page count. A short
+    // comic (fewer than 9 pages, or fewer 9-multiples than the cap) gets
+    // fewer slots, never more than the cap. Never places a slot on the
     // very last page — that's the dedicated "bottom" slot's job.
     // Hilltop's MultiTag scripts are single-load-per-zone, so it's stuck
     // with exactly one reading slot. ClickAdilla has no such per-zone reuse
     // restriction (same as Mondiad — its script just re-scans for banner
-    // divs), so it follows Mondiad's multi-slot-spread behavior instead.
+    // divs), so it also gets the every-9-pages cadence, just capped higher.
     const _net = siteConfig && siteConfig.ad_network;
     const _hilltop = (_net === 'hilltop');
     // Hilltop: exactly ONE reading banner, placed after page 9 (needs a comic longer than 9 pages).
-    const readingSlotCount = _hilltop
-      ? (images.length > 9 ? 1 : 0)
-      : Math.min(MAX_READING_AD_SLOTS, Math.floor((images.length - 1) / 9));
     const readingSlotPages = new Set();
-    if (readingSlotCount > 0) {
-      if (_hilltop) {
-        readingSlotPages.add(9);   // one ad inside the comic, after page 9
-      } else {
-        const interval = images.length / (readingSlotCount + 1);
-        for (let s = 1; s <= readingSlotCount; s++) {
-          readingSlotPages.add(Math.round(interval * s));
-        }
+    if (_hilltop) {
+      if (images.length > 9) readingSlotPages.add(9);   // one ad inside the comic, after page 9
+    } else {
+      for (let p = 9; p < images.length && readingSlotPages.size < MAX_READING_AD_SLOTS; p += 9) {
+        readingSlotPages.add(p);
       }
     }
 
