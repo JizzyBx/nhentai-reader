@@ -30,6 +30,12 @@
     }
   ],
   "ad_network": "clickadilla",
+  "multi_network_rotation_enabled": true,
+  "network_priority": {
+    "mondiad": 3,
+    "hilltop": 2,
+    "clickadilla": 1
+  },
   "clickadilla_anti_adblock": true,
   "paginated_mode_enabled": true,
   "smartlink_enabled": false,
