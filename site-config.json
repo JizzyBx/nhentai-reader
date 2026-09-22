@@ -29,8 +29,10 @@
       "url": "https://x.com/ArcComicDaily"
     }
   ],
-  "ad_network": "hilltop",
+  "ad_network": "exoclick",
+  "exoclick_interstitial_enabled": false,
   "paginated_mode_enabled": true,
-  "smartlink_enabled": true,
-  "smartlink_url": "https://pleased-report.com/mGurjN"
+  "smartlink_enabled": false,
+  "smartlink_url": "",
+  "smartlink_hours": 1
 }
