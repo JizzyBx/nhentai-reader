@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- READER_HTML_VERSION: 22 -->
+<!-- READER_HTML_VERSION: 23 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -432,9 +432,15 @@
   // ignores this attribute entirely — it has only ever used one zone
   // ID regardless of placement.
   let _adSlotCounter = 0;
-  function adSlotHTML(slotType){
+  // forceNetwork (optional): stamps a data-ad-network attribute on this
+  // specific slot, used only by reading-slot rotation to pin a block to a
+  // particular network regardless of the page's overall selected network.
+  // Top/bottom callers never pass this, so those slots carry no such
+  // attribute and fall through to the normal selected-network behavior.
+  function adSlotHTML(slotType, forceNetwork){
     const slotId = 'ad-slot-' + (_adSlotCounter++);
-    return '<div class="ad-slot-container" id="' + slotId + '" data-ad-slot="' + slotType + '"></div>';
+    const netAttr = forceNetwork ? ' data-ad-network="' + forceNetwork + '"' : '';
+    return '<div class="ad-slot-container" id="' + slotId + '" data-ad-slot="' + slotType + '"' + netAttr + '></div>';
   }
 
   // Hard cap on reading-page ad slots per comic, regardless of page
@@ -516,12 +522,47 @@
   // same pipeline as branding. Whichever network is NOT active gets zero
   // script tags, zero divs, zero network calls — no leftover/dead
   // fill attempts from the inactive network.
-  function injectAdSlots(containers){
+  //
+  // forceNetwork (optional): overrides the network for every container
+  // passed in, ignoring any per-container data-ad-network attribute. Used
+  // by paginated mode's top/bottom refresh (those two slots are always a
+  // single network at once, never split) — reading-slot rotation in
+  // scroll mode instead relies on each container's own data-ad-network
+  // attribute (see below), since a single injectAdSlots() call there
+  // covers many slots that may each belong to a different network.
+  //
+  // Without forceNetwork, containers are grouped by their own
+  // data-ad-network attribute (set by adSlotHTML for rotated reading
+  // slots) with any container lacking that attribute (top, bottom, and
+  // every reading slot when rotation is off) falling back to the
+  // dashboard-selected siteConfig.ad_network — exactly the original
+  // single-network behavior, unchanged, for every case rotation doesn't
+  // touch.
+  function injectAdSlots(containers, forceNetwork){
     containers = containers || document.querySelectorAll('.ad-slot-container');
     if (containers.length === 0) return;
 
-    const network = (siteConfig && siteConfig.ad_network) || 'mondiad';
+    const defaultNetwork = (siteConfig && siteConfig.ad_network) || 'mondiad';
 
+    if (forceNetwork) {
+      dispatchToNetwork(forceNetwork, containers);
+      return;
+    }
+
+    // Group by resolved network so each network's injector runs once
+    // with all of its own containers, same as the pre-rotation code did
+    // for the (always single) network case.
+    const groups = {};
+    Array.prototype.forEach.call(containers, function(c){
+      const net = c.getAttribute('data-ad-network') || defaultNetwork;
+      (groups[net] = groups[net] || []).push(c);
+    });
+    Object.keys(groups).forEach(function(net){
+      dispatchToNetwork(net, groups[net]);
+    });
+  }
+
+  function dispatchToNetwork(network, containers){
     if (network === 'hilltop') {
       injectHilltopSlots(containers);
     } else if (network === 'clickadilla') {
@@ -535,9 +576,93 @@
   // used by paginated mode's every-9-page-turns refresh. Clears
   // existing content first so Mondiad/Adsterra don't just find their
   // old div/iframe still sitting there and skip re-serving.
-  function refreshAdSlots(containers){
+  function refreshAdSlots(containers, forceNetwork){
     containers.forEach(function(c){ c.innerHTML = ''; });
-    injectAdSlots(containers);
+    injectAdSlots(containers, forceNetwork);
+  }
+
+  // ---------- Multi-network reading-slot rotation ----------
+  //
+  // OFF by default (site-config.json's "multi_network_rotation_enabled").
+  // When off, every code path below is a no-op and behavior is byte-for-byte
+  // what it was before this feature existed: top/bottom + reading slots all
+  // come from the single dashboard-selected ad_network, exactly as today.
+  //
+  // When ON: top and bottom are STILL untouched — always the selected
+  // network, same as always. Only the in-content reading slots rotate.
+  // Reading content is split into blocks (one 9-page group in scroll mode,
+  // one 5-page-turn group in paginated mode — each mode's own existing
+  // cadence, unchanged). Block 1 always goes to the dashboard-selected
+  // network (priority doesn't override the operator's active pick — it
+  // only decides who comes AFTER). Block 2 goes to whichever OTHER network
+  // has the lowest priority number, block 3 the next, cycling back to the
+  // selected network once every configured network has had one block.
+  //
+  // Priority numbers come from site-config.json's "network_priority"
+  // object, e.g. {"mondiad": 3, "hilltop": 2, "clickadilla": 1} — lower
+  // fills sooner. A network missing from that object, or with a
+  // non-numeric value, sorts last (but is still included in rotation).
+  function rotationEnabled(){
+    return !!(siteConfig && siteConfig.multi_network_rotation_enabled);
+  }
+
+  // Ordered list of networks for the handoff sequence, AFTER the selected
+  // one. e.g. selected = clickadilla, priorities mondiad:3, hilltop:2
+  // -> returns ['hilltop', 'mondiad'] (hilltop's 2 beats mondiad's 3).
+  function rotationHandoffOrder(){
+    const ALL = ['mondiad', 'hilltop', 'clickadilla'];
+    const selected = (siteConfig && siteConfig.ad_network) || 'mondiad';
+    const priorities = (siteConfig && siteConfig.network_priority) || {};
+    const rest = ALL.filter(function(n){ return n !== selected; });
+    rest.sort(function(a, b){
+      const pa = Number(priorities[a]);
+      const pb = Number(priorities[b]);
+      const va = isFinite(pa) ? pa : 999;
+      const vb = isFinite(pb) ? pb : 999;
+      return va - vb;
+    });
+    return rest;
+  }
+
+  // Full block-ownership sequence: the selected network gets the first
+  // TWO blocks, then every other network gets exactly one block each, in
+  // priority order, then the whole sequence repeats. e.g. selected =
+  // clickadilla, priorities mondiad:3 hilltop:2 -> [clickadilla,
+  // clickadilla, hilltop, mondiad], repeating. This (not a flat 1-each
+  // round robin) is Adil's explicit spec — the selected/active network is
+  // meant to still dominate, priority only governs who fills in behind it.
+  function rotationBlockSequence(){
+    const selected = (siteConfig && siteConfig.ad_network) || 'mondiad';
+    return [selected, selected].concat(rotationHandoffOrder());
+  }
+
+  // blockIndex is 0-based (0 = first reading-slot block encountered).
+  // Returns which network owns that block per rotationBlockSequence()
+  // above, cycling once the sequence is exhausted.
+  function networkForBlock(blockIndex){
+    if (!rotationEnabled()) {
+      return (siteConfig && siteConfig.ad_network) || 'mondiad';
+    }
+    const seq = rotationBlockSequence();
+    return seq[blockIndex % seq.length];
+  }
+
+  // Paginated mode has no separate reading slot — just top+bottom,
+  // refreshed together every PAGINATED_AD_REFRESH_EVERY turns. Per Adil:
+  // within the SAME refresh cycle, top and bottom deliberately pull from
+  // TWO DIFFERENT networks at once (not the same one), and both slots'
+  // pointers independently advance one step through the SAME block
+  // sequence used by scroll mode's reading slots (selected network first
+  // for two cycles, then each other network for one cycle, repeating).
+  // slotOffset is 0 for top, 1 for bottom — bottom always starts one
+  // position further into the sequence than top, so as long as 2+
+  // networks are in play they never coincide.
+  function networkForCycle(cycleIndex, slotOffset){
+    if (!rotationEnabled()) {
+      return (siteConfig && siteConfig.ad_network) || 'mondiad';
+    }
+    const seq = rotationBlockSequence();
+    return seq[(cycleIndex + slotOffset) % seq.length];
   }
 
   function injectMondiadSlots(containers){
@@ -996,14 +1121,38 @@
     // restriction (same as Mondiad — its script just re-scans for banner
     // divs), so it also gets the every-9-pages cadence, just capped higher.
     const _net = siteConfig && siteConfig.ad_network;
-    const _hilltop = (_net === 'hilltop');
-    // Hilltop: exactly ONE reading banner, placed after page 9 (needs a comic longer than 9 pages).
-    const readingSlotPages = new Set();
-    if (_hilltop) {
-      if (images.length > 9) readingSlotPages.add(9);   // one ad inside the comic, after page 9
+    const _rotation = rotationEnabled();
+
+    // Reading-slot pages -> which network owns that block. Without
+    // rotation this is exactly the old logic (Hilltop gets one slot at
+    // page 9, everyone else gets up to MAX_READING_AD_SLOTS every 9
+    // pages) — byte-for-byte the same outcome as before this feature
+    // existed. With rotation on, each 9-page block can be owned by a
+    // DIFFERENT network per networkForBlock(), and Hilltop's structural
+    // one-slot-only limit applies only to the block(s) where Hilltop is
+    // the block owner, not to the comic as a whole — a later block owned
+    // by Mondiad/ClickAdilla is unaffected by Hilltop having already used
+    // its one slot earlier.
+    const readingSlotPages = new Map(); // pageNum -> network for that slot
+    if (_rotation) {
+      let blockIndex = 0;
+      for (let p = 9; p < images.length; p += 9) {
+        const owner = networkForBlock(blockIndex);
+        readingSlotPages.set(p, owner);
+        blockIndex++;
+        // No cap here: rotation spreads load across networks, so the old
+        // single-network MAX_READING_AD_SLOTS ceiling (there to protect
+        // one network's page-density policy) doesn't apply the same way.
+        // A very long comic still gets a slot every 9 pages, just handed
+        // to a different network each block.
+      }
+    } else if (_net === 'hilltop') {
+      if (images.length > 9) readingSlotPages.set(9, 'hilltop');
     } else {
-      for (let p = 9; p < images.length && readingSlotPages.size < MAX_READING_AD_SLOTS; p += 9) {
-        readingSlotPages.add(p);
+      let count = 0;
+      for (let p = 9; p < images.length && count < MAX_READING_AD_SLOTS; p += 9) {
+        readingSlotPages.set(p, _net || 'mondiad');
+        count++;
       }
     }
 
@@ -1015,7 +1164,7 @@
       html += '</div>';
 
       if (readingSlotPages.has(pageNum) && pageNum !== images.length){
-        html += adSlotHTML('reading');
+        html += adSlotHTML('reading', readingSlotPages.get(pageNum));
       }
     });
 
@@ -1057,6 +1206,7 @@
   let _pgImages = [];
   let _pgTurnCount = 0;      // turns since last ad refresh
   let _pgLoaded = {};        // cache of Image() objects already requested, by index
+  let _pgCycleIndex = 0;     // which 5-turn refresh cycle we're in, for rotation
 
   function renderPaginated(images){
     const area = document.getElementById('pagesArea');
@@ -1066,6 +1216,7 @@
     _pgIndex = 0;
     _pgTurnCount = 0;
     _pgLoaded = {};
+    _pgCycleIndex = 0;
 
     area.innerHTML =
       '<div class="paginated-wrap">' +
@@ -1087,7 +1238,17 @@
 
     // Both ad slots injected once here — refreshAdSlots() re-fills
     // them in place later without touching anything else on rerender.
-    injectAdSlots(document.querySelectorAll('#pgAdTop, #pgAdBottom'));
+    // Rotation off: both slots get the selected network via the normal
+    // injectAdSlots(containers) path, unchanged. Rotation on: top and
+    // bottom are injected SEPARATELY, each forced to its own network for
+    // cycle 0 (see networkForCycle) — this is the only place besides
+    // pgMaybeRefreshAds where they can differ.
+    if (rotationEnabled()) {
+      injectAdSlots(document.querySelectorAll('#pgAdTop'), networkForCycle(0, 0));
+      injectAdSlots(document.querySelectorAll('#pgAdBottom'), networkForCycle(0, 1));
+    } else {
+      injectAdSlots(document.querySelectorAll('#pgAdTop, #pgAdBottom'));
+    }
 
     document.getElementById('pgTapLeft').addEventListener('click', function(){ pgTurn(-1); });
     document.getElementById('pgTapRight').addEventListener('click', function(){ pgTurn(1); });
@@ -1137,12 +1298,40 @@
     _pgTurnCount++;
     if (_pgTurnCount >= PAGINATED_AD_REFRESH_EVERY){
       _pgTurnCount = 0;
-      // Hilltop MultiTag banners are single-load scripts: re-injecting the
-      // same zone code repeatedly would stack duplicate loads. Mondiad and
-      // ClickAdilla both just re-scan for their own divs, so they get the
-      // periodic in-place refresh.
+      _pgCycleIndex++;
       const _net = siteConfig && siteConfig.ad_network;
-      if (_net !== 'hilltop') {
+      if (rotationEnabled()) {
+        // Top and bottom each get their own network for the new cycle —
+        // may genuinely differ from each other (see networkForCycle).
+        // Hilltop's single-load-per-zone limitation still applies: if
+        // Hilltop happens to own a slot this cycle, that slot simply
+        // doesn't get a fresh reload (same restriction it always had),
+        // while the OTHER slot (if owned by Mondiad/ClickAdilla) still
+        // refreshes normally.
+        const topNet = networkForCycle(_pgCycleIndex, 0);
+        const bottomNet = networkForCycle(_pgCycleIndex, 1);
+        const pgTop = document.getElementById('pgAdTop');
+        const pgBottom = document.getElementById('pgAdBottom');
+        // Hilltop's "never fill twice" guard (data-hilltop-loaded) is only
+        // meant to stop the SAME already-filled Hilltop slot from being
+        // re-requested — it's not meant to permanently lock a slot out of
+        // ever getting a fresh Hilltop ad again on some LATER cycle after
+        // rotation has moved it to another network and back. Clear the
+        // flag whenever a slot isn't Hilltop's this cycle, so if rotation
+        // hands it back to Hilltop later, that slot is treated as fresh.
+        if (pgTop && topNet !== 'hilltop') pgTop.removeAttribute('data-hilltop-loaded');
+        if (pgBottom && bottomNet !== 'hilltop') pgBottom.removeAttribute('data-hilltop-loaded');
+        if (topNet !== 'hilltop') {
+          refreshAdSlots(document.querySelectorAll('#pgAdTop'), topNet);
+        }
+        if (bottomNet !== 'hilltop') {
+          refreshAdSlots(document.querySelectorAll('#pgAdBottom'), bottomNet);
+        }
+      } else if (_net !== 'hilltop') {
+        // Hilltop MultiTag banners are single-load scripts: re-injecting the
+        // same zone code repeatedly would stack duplicate loads. Mondiad and
+        // ClickAdilla both just re-scan for their own divs, so they get the
+        // periodic in-place refresh.
         refreshAdSlots(document.querySelectorAll('#pgAdTop, #pgAdBottom'));
       }
     }
