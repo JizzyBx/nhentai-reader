@@ -36,7 +36,7 @@
     "hilltop": 3,
     "clickadilla": 2
   },
-  "clickadilla_anti_adblock": false,
+  "clickadilla_anti_adblock": true,
   "paginated_mode_enabled": true,
   "smartlink_enabled": false,
   "smartlink_url": "",
