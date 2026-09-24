@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- READER_HTML_VERSION: 25 -->
+<!-- READER_HTML_VERSION: 26 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -396,6 +396,80 @@
     color: var(--text-dim);
     font-size: 0.85rem;
   }
+
+  /* ---------- v26: skeleton, lazy page frames, ad-slot states ---------- */
+  @keyframes sk-shimmer{
+    0%{ background-position: 100% 0; }
+    100%{ background-position: -100% 0; }
+  }
+  .sk, .ad-slot-container.ad-loading{
+    background: linear-gradient(100deg, var(--bg-raised) 30%, #262a33 50%, var(--bg-raised) 70%);
+    background-size: 200% 100%;
+    animation: sk-shimmer 1.4s linear infinite;
+  }
+  .sk{ border-radius: 10px; }
+  .sk-title-block{ padding: 20px 16px 24px; border-bottom: 1px solid var(--line); }
+  .sk-h1{ height: 26px; width: 70%; margin-bottom: 14px; }
+  .sk-line{ height: 14px; width: 45%; margin-bottom: 18px; }
+  .sk-grid{ display:grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .sk-card{ height: 58px; }
+  .sk-ad{ height: 90px; margin: 22px 16px; }
+  .sk-page{ width:100%; aspect-ratio: 0.7; border-radius: 0; }
+
+  /* Ad slots: hidden until their ad is actually requested (no empty
+     gaps), shimmer while it loads, gap collapses if nothing fills. */
+  .ad-slot-container.ad-pending{ display:none; }
+  .ad-slot-container.ad-loading{ min-height: 90px; border-radius: 10px; }
+  .ad-slot-container.ad-empty{ margin: 0; }
+
+  /* Scroll-mode pages: a fixed-ratio skeleton frame until the image has
+     loaded, then the real image takes over (fades in). */
+  .page-frame{
+    position: relative;
+    width: 100%;
+    background: var(--bg-raised);
+    overflow: hidden;
+  }
+  .page-frame.loading{ aspect-ratio: var(--pg-ar, 0.7); }
+  .page-frame.loading::after,
+  .paginated-stage.pg-loading::after{
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: linear-gradient(100deg, transparent 30%, rgba(255,255,255,0.05) 50%, transparent 70%);
+    background-size: 200% 100%;
+    animation: sk-shimmer 1.3s linear infinite;
+  }
+  .page-frame img{ opacity: 0; transition: opacity .25s ease; }
+  .page-frame.loaded img{ opacity: 1; }
+  .page-frame.failed{
+    aspect-ratio: var(--pg-ar, 0.7);
+    display:flex; align-items:center; justify-content:center;
+  }
+  .pg-retry{
+    line-height: 1.4;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 10px 16px;
+    font-size: 0.85rem;
+  }
+
+  /* Paginated: keep the stage the same size while the next page loads so
+     the ads around it don't jump. */
+  .paginated-stage.pg-loading{
+    aspect-ratio: var(--pg-ar, 0.7);
+    overflow: hidden;
+    background: var(--bg-raised);
+  }
+  .paginated-stage.pg-loading img{ opacity: 0; }
+
+  @media (prefers-reduced-motion: reduce){
+    .sk, .ad-slot-container.ad-loading,
+    .page-frame.loading::after, .paginated-stage.pg-loading::after{ animation: none; }
+  }
 </style>
 </head>
 <body>
@@ -403,9 +477,19 @@
 <div id="siteHeader"></div>
 
 <div class="wrap" id="wrap">
-  <div class="state" id="loadingState">
-    <div class="spinner"></div>
-    <h2>Loading comic…</h2>
+  <!-- Skeleton: on screen the instant the HTML arrives, before any JS
+       fetch finishes. renderComic() replaces it with the real page. -->
+  <div id="loadingState" aria-hidden="true">
+    <div class="sk-title-block">
+      <div class="sk sk-h1"></div>
+      <div class="sk sk-line"></div>
+      <div class="sk-grid">
+        <div class="sk sk-card"></div><div class="sk sk-card"></div>
+        <div class="sk sk-card"></div><div class="sk sk-card"></div>
+      </div>
+    </div>
+    <div class="sk sk-ad"></div>
+    <div class="sk sk-page"></div>
   </div>
 </div>
 
@@ -437,10 +521,14 @@
   // particular network regardless of the page's overall selected network.
   // Top/bottom callers never pass this, so those slots carry no such
   // attribute and fall through to the normal selected-network behavior.
-  function adSlotHTML(slotType, forceNetwork){
+  // opts.after (optional): the 1-based page this slot sits right after.
+  // Slots start hidden ("ad-pending") and are only filled once that page
+  // has loaded — see startScrollPipeline().
+  function adSlotHTML(slotType, forceNetwork, opts){
     const slotId = 'ad-slot-' + (_adSlotCounter++);
     const netAttr = forceNetwork ? ' data-ad-network="' + forceNetwork + '"' : '';
-    return '<div class="ad-slot-container" id="' + slotId + '" data-ad-slot="' + slotType + '"' + netAttr + '></div>';
+    const afterAttr = (opts && opts.after) ? ' data-ad-after="' + opts.after + '"' : '';
+    return '<div class="ad-slot-container ad-pending" id="' + slotId + '" data-ad-slot="' + slotType + '"' + netAttr + afterAttr + '></div>';
   }
 
   // Hard cap on reading-page ad slots per comic, regardless of page
@@ -546,51 +634,186 @@
     return (siteConfig && siteConfig.ad_network === 'hilltop') ? 'hilltop' : 'mondiad';
   }
 
-  function injectAdSlots(containers, forceNetwork){
-    containers = containers || document.querySelectorAll('.ad-slot-container');
-    if (containers.length === 0) return;
+  // ---------- Ad engine ----------
+  //
+  // Why ads used to go blank after a reading-mode switch, after ~5
+  // paginated page turns, and far down long comics: Mondiad's banner.js /
+  // native.js scan the page for their marker divs ONCE, at the moment the
+  // script loads. The old code loaded each script a single time, then kept
+  // creating new divs (every mode switch, every paginated refresh, every
+  // reading slot at once at page load) — divs the script never looked at,
+  // so nothing filled.
+  //
+  // Rules that fix it for every network:
+  //   1. One injection = one fresh marker div + one fresh load of the
+  //      network's script AFTER that div exists (the only pattern ever
+  //      confirmed working live on this site).
+  //   2. Injections for the same network run ONE AT A TIME, so a script
+  //      never scans two unfilled divs of the same zone at once (networks
+  //      may only fill the first instance per scan).
+  //   3. Slots that already hold an ad are "retired" before a re-scan, so
+  //      a later script load can't stack a second ad into an old slot.
+  //   4. Ads are requested only when their block of pages has loaded (see
+  //      startScrollPipeline / renderPaginated) — never all at page load.
 
-    const defaultNetwork = activeNetwork();
+  const MONDIAD_ZONE_ID = '79d7aa12-5511-404b-89a3-dbeb4ae4b292';
+  const AD_FILL_TIMEOUT_MS = 4000;  // an empty slot counts as "no fill" after this long
+  const AD_GAP_MS = 300;            // pause between two injections of the same network
 
-    if (forceNetwork) {
-      dispatchToNetwork(forceNetwork, containers);
+  let _renderToken = 0;             // bumped on every (re)render; stale async work checks it
+  let _cleanups = [];               // observers etc. dropped when the reading area re-renders
+  const _adQueues = {};             // network -> { busy, items[] }
+
+  function beginRender(){
+    _renderToken++;
+    _cleanups.forEach(function(fn){ try { fn(); } catch (e) {} });
+    _cleanups = [];
+    Object.keys(_adQueues).forEach(function(k){ _adQueues[k].items = []; });
+  }
+
+  // True once anything other than our own marker divs / scripts is inside
+  // the slot — i.e. the network actually put an ad there.
+  function slotHasAd(container){
+    const all = container.querySelectorAll('*');
+    for (let i = 0; i < all.length; i++){
+      const el = all[i];
+      const tag = el.tagName;
+      if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'LINK') continue;
+      if (el.hasAttribute('data-mndbanid') || el.hasAttribute('data-mndazid') || el.hasAttribute('data-ad-done')) continue;
+      return true;
+    }
+    return false;
+  }
+
+  // Shimmer while waiting; collapse the gap if nothing fills; flip back to
+  // normal the moment an ad does appear (even late — e.g. a network that
+  // only renders once the slot scrolls into view).
+  function watchSlot(container, timeoutMs, onSettled){
+    container.classList.remove('ad-pending', 'ad-empty');
+    container.classList.add('ad-loading');
+    let settled = false;
+    let observer = null;
+    function settle(){ if (!settled){ settled = true; if (onSettled) onSettled(); } }
+    function filled(){
+      container.classList.remove('ad-loading', 'ad-empty');
+      container.style.minHeight = '';
+      if (observer) observer.disconnect();
+      settle();
+    }
+    if (slotHasAd(container)) { filled(); return; }
+    if ('MutationObserver' in window) {
+      observer = new MutationObserver(function(){ if (slotHasAd(container)) filled(); });
+      observer.observe(container, { childList: true, subtree: true });
+    }
+    setTimeout(function(){
+      if (slotHasAd(container)) { filled(); return; }
+      container.classList.remove('ad-loading');
+      container.classList.add('ad-empty');
+      container.style.minHeight = '';
+      settle();
+    }, timeoutMs);
+  }
+
+  // Marker divs whose slot already shows an ad are switched off so the
+  // next script load skips them (see rule 3).
+  function retireFilledDivs(attr){
+    document.querySelectorAll('[' + attr + ']').forEach(function(d){
+      const slot = d.closest('.ad-slot-container');
+      if (slot && slotHasAd(slot)) {
+        d.setAttribute('data-ad-done', d.getAttribute(attr));
+        d.removeAttribute(attr);
+      }
+    });
+  }
+
+  function reloadAdScript(key, srcUrl){
+    document.querySelectorAll('script[data-ad-loader="' + key + '"]').forEach(function(old){
+      if (old.parentNode) old.parentNode.removeChild(old);
+    });
+    const s = document.createElement('script');
+    s.async = true;
+    s.src = srcUrl;
+    s.setAttribute('data-ad-loader', key);
+    document.head.appendChild(s);
+  }
+
+  // Puts ONE ad into ONE slot. done(gapMs) tells the queue when the next
+  // injection for this network may start.
+  function injectOne(network, container, done){
+    if (network === 'hilltop') {
+      // Hilltop appends its own script inside the slot (one zone per slot,
+      // never reused), so nothing to serialise or re-scan.
+      injectHilltopSlots([container]);
+      watchSlot(container, AD_FILL_TIMEOUT_MS * 2, null);
+      done(0);
       return;
     }
-
-    // Group by resolved network so each network's injector runs once
-    // with all of its own containers, same as the pre-rotation code did
-    // for the (always single) network case.
-    const groups = {};
-    Array.prototype.forEach.call(containers, function(c){
-      const net = c.getAttribute('data-ad-network') || defaultNetwork;
-      (groups[net] = groups[net] || []).push(c);
-    });
-    Object.keys(groups).forEach(function(net){
-      dispatchToNetwork(net, groups[net]);
-    });
+    const isNative = (network === 'native');
+    const attr = isNative ? 'data-mndazid' : 'data-mndbanid';
+    retireFilledDivs(attr);
+    const div = document.createElement('div');
+    div.setAttribute(attr, isNative ? nativeZoneId() : MONDIAD_ZONE_ID);
+    container.appendChild(div);
+    reloadAdScript(isNative ? 'native' : 'mondiad',
+                   isNative ? 'https://ss.mrmnd.com/native.js' : 'https://ss.mrmnd.com/banner.js');
+    watchSlot(container, AD_FILL_TIMEOUT_MS, function(){ done(AD_GAP_MS); });
   }
 
-  function dispatchToNetwork(network, containers){
-    // Only these three names are real. Anything else (e.g. a stale
-    // "clickadilla" left in an old saved config or cached page) is
-    // treated as Mondiad instead of being passed around under a name
-    // nothing handles anymore.
-    if (network !== 'hilltop' && network !== 'native') network = 'mondiad';
-    if (network === 'hilltop') {
-      injectHilltopSlots(containers);
-    } else if (network === 'native') {
-      injectNativeSlots(containers);
-    } else {
-      injectMondiadSlots(containers);
+  function queueAdInjection(network, container){
+    const q = _adQueues[network] || (_adQueues[network] = { busy: false, items: [] });
+    q.items.push({ container: container, token: _renderToken });
+    drainAdQueue(network);
+  }
+
+  function drainAdQueue(network){
+    const q = _adQueues[network];
+    if (!q || q.busy) return;
+    const item = q.items.shift();
+    if (!item) return;
+    // Dropped if the reading area was re-rendered (mode switch) since queued.
+    if (item.token !== _renderToken || !item.container.isConnected) { drainAdQueue(network); return; }
+    q.busy = true;
+    let finished = false;
+    function release(gapMs){
+      if (finished) return;
+      finished = true;
+      setTimeout(function(){ q.busy = false; drainAdQueue(network); }, gapMs);
+    }
+    try {
+      injectOne(network, item.container, release);
+    } catch (err) {
+      release(0);
     }
   }
 
-  // Re-requests a fresh ad into containers that already have one —
-  // used by paginated mode's every-9-page-turns refresh. Clears
-  // existing content first so Mondiad/Adsterra don't just find their
-  // old div/iframe still sitting there and skip re-serving.
+  // Entry point used everywhere. Each container is queued on its own —
+  // never batched — so every ad is its own fresh request.
+  //
+  // forceNetwork (optional): overrides the network for every container
+  // passed in. Used by paginated mode's top/bottom slots. Otherwise each
+  // container uses its own data-ad-network attribute (rotated reading
+  // slots) and falls back to the dashboard-selected Active Network.
+  function injectAdSlots(containers, forceNetwork){
+    containers = containers || document.querySelectorAll('.ad-slot-container');
+    const defaultNetwork = activeNetwork();
+    Array.prototype.forEach.call(containers, function(c){
+      let net = forceNetwork || c.getAttribute('data-ad-network') || defaultNetwork;
+      // Only three names are real; anything stale falls back to Mondiad.
+      if (net !== 'hilltop' && net !== 'native') net = 'mondiad';
+      queueAdInjection(net, c);
+    });
+  }
+
+  // Re-requests a fresh ad into slots that already have one (paginated
+  // mode's periodic refresh). The slot keeps its current height while the
+  // new ad loads, so the page doesn't jump.
   function refreshAdSlots(containers, forceNetwork){
-    containers.forEach(function(c){ c.innerHTML = ''; });
+    Array.prototype.forEach.call(containers, function(c){
+      const h = c.offsetHeight;
+      if (h) c.style.minHeight = h + 'px';
+      c.innerHTML = '';
+      c.classList.remove('ad-empty');
+    });
     injectAdSlots(containers, forceNetwork);
   }
 
@@ -702,31 +925,7 @@
     return seq[(cycleIndex + slotOffset) % seq.length];
   }
 
-  function injectMondiadSlots(containers){
-    containers.forEach(function(container){
-      const div = document.createElement('div');
-      div.setAttribute('data-mndbanid', '79d7aa12-5511-404b-89a3-dbeb4ae4b292');
-      container.appendChild(div);
-    });
-
-    // Load banner.js only now, after every data-mndbanid div already
-    // exists in the DOM — this sidesteps needing to know whether
-    // Mondiad's script exposes any kind of manual re-scan/refresh
-    // method (it may or may not; that was never actually confirmed,
-    // only guessed at in an earlier version of this file). Loading
-    // the script fresh each time this function runs means its first
-    // and only scan of the page happens after the elements it's
-    // looking for are already there — no race condition to work
-    // around. Guard against loading it twice if injectAdSlots is
-    // somehow called more than once in a page's lifetime.
-    if (!window._mndBannerScriptLoaded) {
-      window._mndBannerScriptLoaded = true;
-      const script = document.createElement('script');
-      script.src = 'https://ss.mrmnd.com/banner.js';
-      script.async = true;
-      document.head.appendChild(script);
-    }
-  }
+  // (Mondiad banners are injected by the ad engine above — see injectOne.)
 
   // Hilltop MultiTag banners — one zone per placement, never reused
   // across two slots. Each zone's script inserts its banner right
@@ -787,22 +986,7 @@
     return override ? String(override) : NATIVE_ZONE_ID;
   }
 
-  function injectNativeSlots(containers){
-    Array.prototype.forEach.call(containers, function(container){
-      const div = document.createElement('div');
-      div.setAttribute('data-mndazid', nativeZoneId());
-      container.appendChild(div);
-    });
-
-    document.querySelectorAll('script[data-native-loader="1"]').forEach(function(old){
-      old.parentNode && old.parentNode.removeChild(old);
-    });
-    const s = document.createElement('script');
-    s.async = true;
-    s.src = 'https://ss.mrmnd.com/native.js';
-    s.setAttribute('data-native-loader', '1');
-    document.head.appendChild(s);
-  }
+  // (Native ads are injected by the ad engine above — see injectOne.)
 
   function getCodeFromURL(){
     const params = new URLSearchParams(window.location.search);
@@ -1020,10 +1204,13 @@
     const area = document.getElementById('pagesArea');
     if (!area) return;
 
+    beginRender();                 // drops the previous mode's observers + queued ads
+    const token = _renderToken;
+
     let html = '';
 
     // Ad right after title, before first page — top slot (300x250)
-    html += adSlotHTML('top');
+    html += adSlotHTML('top', null, { pending: true });
 
     // Reading-page ad slots: placed every 9th page (9, 18, 27...), capped
     // at MAX_READING_AD_SLOTS total regardless of page count. A short
@@ -1073,33 +1260,171 @@
     images.forEach(function(src, i){
       const pageNum = i + 1;
       html += '<div class="page">';
-      html += '<img src="' + escapeAttr(src) + '" loading="lazy" alt="Page ' + pageNum + '">';
+      // Skeleton frame first. The real <img> only gets its src when the
+      // pipeline reaches it (see startScrollPipeline) — no native
+      // loading="lazy", so load ORDER is ours and ads can follow blocks.
+      html += '<div class="page-frame loading" data-idx="' + i + '">' +
+                '<img data-src="' + escapeAttr(src) + '" alt="" decoding="async">' +
+              '</div>';
       html += '<div class="page-num">' + pageNum + ' / ' + images.length + '</div>';
       html += '</div>';
 
       if (readingSlotPages.has(pageNum) && pageNum !== images.length){
-        html += adSlotHTML('reading', readingSlotPages.get(pageNum));
+        html += adSlotHTML('reading', readingSlotPages.get(pageNum), { after: pageNum });
       }
     });
 
     // Final ad after the last page — bottom slot (160x300)
-    html += adSlotHTML('bottom');
+    html += adSlotHTML('bottom', null, { after: images.length });
     html += '<div class="end-note">End of comic</div>';
 
     area.innerHTML = html;
-    injectAdSlots();
 
     // Smartlink: one listener per page image, all sharing the same
-    // maybeFireSmartlink() gate — only the first tap of the day across
-    // ALL of this comic's page images actually navigates anywhere;
-    // every tap after that (this comic, today) is a silent no-op, same
-    // as before this feature existed. Attached here (after
-    // area.innerHTML is set) rather than via event delegation on
-    // `area`, since these <img> elements are static once rendered —
-    // no need for delegation's extra indirection.
+    // maybeFireSmartlink() gate (unchanged behavior).
     area.querySelectorAll('.page img').forEach(function(img){
       img.addEventListener('click', maybeFireSmartlink);
     });
+
+    startScrollPipeline(area, token);
+  }
+
+  // First loaded page's shape becomes the skeleton shape for every page
+  // still waiting, so the layout barely moves as images arrive.
+  function adoptRatio(area, img){
+    if (area.getAttribute('data-ar-set')) return;
+    if (!img.naturalWidth || !img.naturalHeight) return;
+    area.style.setProperty('--pg-ar', (img.naturalWidth / img.naturalHeight).toFixed(4));
+    area.setAttribute('data-ar-set', '1');
+  }
+
+  // Scroll-mode loading order:
+  //   skeleton -> top ad request -> page 1 -> page 2 -> ...
+  // Pages load in order, two at a time, only as far as a little past the
+  // viewport (jump far down and it loads around you, not everything above).
+  // Each ad slot is requested when the page right before it has loaded —
+  // i.e. when its block of 9 pages is in — never all at once at page load.
+  function startScrollPipeline(area, token){
+    const frames = Array.prototype.slice.call(area.querySelectorAll('.page-frame'));
+    const total = frames.length;
+    const state = [];                 // per page: 0 idle, 1 loading, 2 finished, 3 waiting to retry
+    const tries = [];
+    for (let k = 0; k < total; k++) { state.push(0); tries.push(0); }
+    const near = {};                  // index -> true while its frame is close to the viewport
+    let inflight = 0;
+    const CONCURRENCY = 2;            // pages downloading at once
+    const AHEAD = 2;                  // pages fetched beyond the last near one
+    const slotAfter = {};             // page number -> ad slot sitting right after it
+    Array.prototype.forEach.call(area.querySelectorAll('.ad-slot-container[data-ad-after]'), function(c){
+      slotAfter[c.getAttribute('data-ad-after')] = c;
+    });
+
+    function alive(){ return token === _renderToken; }
+
+    function startSlot(slot){
+      if (!slot || slot.getAttribute('data-ad-started')) return;
+      slot.setAttribute('data-ad-started', '1');
+      injectAdSlots([slot]);
+    }
+
+    function finishPage(i){
+      state[i] = 2;
+      startSlot(slotAfter[i + 1]);    // block complete -> its ad goes now
+    }
+
+    function failPage(i){
+      const frame = frames[i];
+      frame.classList.remove('loading');
+      frame.classList.add('failed');
+      const btn = document.createElement('button');
+      btn.className = 'pg-retry';
+      btn.textContent = 'Page ' + (i + 1) + ' didn\'t load — tap to retry';
+      btn.addEventListener('click', function(){
+        if (btn.parentNode) btn.parentNode.removeChild(btn);
+        frame.classList.remove('failed');
+        frame.classList.add('loading');
+        tries[i] = 0;
+        state[i] = 0;
+        pump();
+      });
+      frame.appendChild(btn);
+      finishPage(i);                  // a broken page must not hold its block's ad back
+    }
+
+    function loadPage(i){
+      const frame = frames[i];
+      const img = frame.querySelector('img');
+      state[i] = 1;
+      inflight++;
+      img.onload = function(){
+        img.onload = img.onerror = null;
+        inflight--;
+        if (!alive()) return;
+        img.alt = 'Page ' + (i + 1);
+        frame.classList.remove('loading', 'failed');
+        frame.classList.add('loaded');
+        adoptRatio(area, img);
+        finishPage(i);
+        pump();
+      };
+      img.onerror = function(){
+        img.onload = img.onerror = null;
+        inflight--;
+        if (!alive()) return;
+        tries[i]++;
+        if (tries[i] <= 2) {
+          state[i] = 3;
+          setTimeout(function(){
+            if (!alive()) return;
+            state[i] = 0;
+            pump();
+          }, 900 * tries[i]);
+        } else {
+          failPage(i);
+        }
+        pump();
+      };
+      if (i === 0) img.setAttribute('fetchpriority', 'high');
+      img.removeAttribute('src');     // makes a retry re-request instead of being ignored
+      img.src = img.getAttribute('data-src');
+    }
+
+    function pump(){
+      if (!alive()) return;
+      let lo = -1, hi = -1;
+      Object.keys(near).forEach(function(k){
+        const n = +k;
+        if (lo < 0 || n < lo) lo = n;
+        if (n > hi) hi = n;
+      });
+      if (lo < 0) { lo = 0; hi = 0; }   // nothing measured yet -> start at page 1
+      const from = Math.max(0, lo - 1);
+      const to = Math.min(total - 1, hi + AHEAD);
+      for (let i = from; i <= to && inflight < CONCURRENCY; i++){
+        if (state[i] === 0) loadPage(i);
+      }
+    }
+
+    if ('IntersectionObserver' in window) {
+      const io = new IntersectionObserver(function(entries){
+        entries.forEach(function(e){
+          const i = +e.target.getAttribute('data-idx');
+          if (e.isIntersecting) near[i] = true; else delete near[i];
+        });
+        pump();
+      }, { rootMargin: '700px 0px 1200px 0px' });
+      frames.forEach(function(f){ io.observe(f); });
+      _cleanups.push(function(){ io.disconnect(); });
+    } else {
+      // Very old browser without viewport tracking: load everything, in order.
+      for (let k = 0; k < total; k++) near[k] = true;
+    }
+
+    // 1) the top ad request goes out first ...
+    const topSlot = area.querySelector('.ad-slot-container[data-ad-slot="top"]');
+    if (topSlot) startSlot(topSlot);
+    // 2) ... then page 1, page 2, ...
+    pump();
   }
 
   // ---------- Paginated mode ----------
@@ -1120,11 +1445,17 @@
   let _pgImages = [];
   let _pgTurnCount = 0;      // turns since last ad refresh
   let _pgLoaded = {};        // cache of Image() objects already requested, by index
+  let _pgRefreshPending = false; // a refresh is waiting for the shown page to finish loading
+  let _pgAfterLoad = [];         // callbacks to run once the shown page has loaded
   let _pgCycleIndex = 0;     // which 5-turn refresh cycle we're in, for rotation
 
   function renderPaginated(images){
     const area = document.getElementById('pagesArea');
     if (!area) return;
+
+    beginRender();                 // drops the previous mode's observers + queued ads
+    _pgRefreshPending = false;
+    _pgAfterLoad = [];
 
     _pgImages = images;
     _pgIndex = 0;
@@ -1134,8 +1465,8 @@
 
     area.innerHTML =
       '<div class="paginated-wrap">' +
-        '<div class="ad-slot-container" id="pgAdTop" data-ad-slot="top"></div>' +
-        '<div class="paginated-stage" id="pgStage">' +
+        '<div class="ad-slot-container ad-pending" id="pgAdTop" data-ad-slot="top"></div>' +
+        '<div class="paginated-stage pg-loading" id="pgStage">' +
           '<img id="pgImage" alt="">' +
           '<div class="tap-zone left" id="pgTapLeft"></div>' +
           '<div class="tap-zone right" id="pgTapRight"></div>' +
@@ -1147,22 +1478,8 @@
           '<button id="pgNext" title="Next page">&rsaquo;</button>' +
           '<button id="pgLast" title="Last page">&raquo;</button>' +
         '</div>' +
-        '<div class="ad-slot-container" id="pgAdBottom" data-ad-slot="bottom"></div>' +
+        '<div class="ad-slot-container ad-pending" id="pgAdBottom" data-ad-slot="bottom"></div>' +
       '</div>';
-
-    // Both ad slots injected once here — refreshAdSlots() re-fills
-    // them in place later without touching anything else on rerender.
-    // Rotation off: both slots get the selected network via the normal
-    // injectAdSlots(containers) path, unchanged. Rotation on: top and
-    // bottom are injected SEPARATELY, each forced to its own network for
-    // cycle 0 (see networkForCycle) — this is the only place besides
-    // pgMaybeRefreshAds where they can differ.
-    if (rotationEnabled()) {
-      injectAdSlots(document.querySelectorAll('#pgAdTop'), networkForCycle(0, 0));
-      injectAdSlots(document.querySelectorAll('#pgAdBottom'), networkForCycle(0, 1));
-    } else {
-      injectAdSlots(document.querySelectorAll('#pgAdTop, #pgAdBottom'));
-    }
 
     document.getElementById('pgTapLeft').addEventListener('click', function(){ pgTurn(-1); });
     document.getElementById('pgTapRight').addEventListener('click', function(){ pgTurn(1); });
@@ -1171,17 +1488,44 @@
     document.getElementById('pgFirst').addEventListener('click', function(){ pgJump(0); });
     document.getElementById('pgLast').addEventListener('click', function(){ pgJump(_pgImages.length - 1); });
 
+    // Loading order: skeleton (already showing) -> top ad request -> page 1
+    // -> bottom ad once page 1 has loaded. With rotation on, top and bottom
+    // each start on their own network for cycle 0 (see networkForCycle);
+    // otherwise both use the Active Network, as before.
+    const token = _renderToken;
+    const rot = rotationEnabled();
+    injectAdSlots(document.querySelectorAll('#pgAdTop'), rot ? networkForCycle(0, 0) : undefined);
     pgShow(0);
     pgPreloadAround(0);
+    pgWhenCurrentLoaded(function(){
+      if (token !== _renderToken) return;
+      injectAdSlots(document.querySelectorAll('#pgAdBottom'), rot ? networkForCycle(0, 1) : undefined);
+    });
   }
 
   function pgShow(index){
     if (index < 0 || index >= _pgImages.length) return;
     _pgIndex = index;
     const img = document.getElementById('pgImage');
+    const stage = document.getElementById('pgStage');
     if (img) {
+      // Stage keeps its size + shimmers until this page has loaded.
+      if (stage) stage.classList.add('pg-loading');
+      const shown = index;
+      const finish = function(){
+        img.onload = img.onerror = null;
+        if (_pgIndex !== shown) return;      // reader already moved on
+        if (stage) stage.classList.remove('pg-loading');
+        const area = document.getElementById('pagesArea');
+        if (area) adoptRatio(area, img);
+        const cbs = _pgAfterLoad.splice(0);
+        cbs.forEach(function(cb){ cb(); });
+      };
+      img.onload = finish;
+      img.onerror = finish;
       img.src = _pgImages[index];
       img.alt = 'Page ' + (index + 1);
+      if (img.complete && img.naturalWidth > 0) finish();   // already cached
     }
     const counter = document.getElementById('pgCounter');
     if (counter) counter.textContent = (index + 1) + ' / ' + _pgImages.length;
@@ -1196,6 +1540,20 @@
     if (lastBtn) lastBtn.disabled = (index >= _pgImages.length - 1);
   }
 
+  // Runs cb once the page currently on screen has finished loading (or
+  // right away if it already has). Ads are tied to this so they're
+  // requested after the block's page is in, not before.
+  function pgWhenCurrentLoaded(cb){
+    const stage = document.getElementById('pgStage');
+    if (!stage || !stage.classList.contains('pg-loading')) { cb(); return; }
+    _pgAfterLoad.push(cb);
+    // Safety net: a broken image must never hold an ad back forever.
+    setTimeout(function(){
+      const i = _pgAfterLoad.indexOf(cb);
+      if (i >= 0) { _pgAfterLoad.splice(i, 1); cb(); }
+    }, 3500);
+  }
+
   // Preloads the current page plus the next 2 (3 total in flight/cached)
   // so tapping forward feels instant rather than load-then-wait.
   function pgPreloadAround(index){
@@ -1208,46 +1566,55 @@
     }
   }
 
+  // Every PAGINATED_AD_REFRESH_EVERY page-turns the top/bottom ads are
+  // re-requested — but only once the page the reader is on has actually
+  // loaded (the block is "in"), never mid-load.
   function pgMaybeRefreshAds(){
     _pgTurnCount++;
-    if (_pgTurnCount >= PAGINATED_AD_REFRESH_EVERY){
-      _pgTurnCount = 0;
-      _pgCycleIndex++;
-      const _net = activeNetwork();
-      if (rotationEnabled()) {
-        // Top and bottom each get their own network for the new cycle —
-        // may genuinely differ from each other (see networkForCycle).
-        // Hilltop's single-load-per-zone limitation still applies: if
-        // Hilltop happens to own a slot this cycle, that slot simply
-        // doesn't get a fresh reload (same restriction it always had),
-        // while the OTHER slot (if owned by Mondiad/native) still
-        // refreshes normally.
-        const topNet = networkForCycle(_pgCycleIndex, 0);
-        const bottomNet = networkForCycle(_pgCycleIndex, 1);
-        const pgTop = document.getElementById('pgAdTop');
-        const pgBottom = document.getElementById('pgAdBottom');
-        // Hilltop's "never fill twice" guard (data-hilltop-loaded) is only
-        // meant to stop the SAME already-filled Hilltop slot from being
-        // re-requested — it's not meant to permanently lock a slot out of
-        // ever getting a fresh Hilltop ad again on some LATER cycle after
-        // rotation has moved it to another network and back. Clear the
-        // flag whenever a slot isn't Hilltop's this cycle, so if rotation
-        // hands it back to Hilltop later, that slot is treated as fresh.
-        if (pgTop && topNet !== 'hilltop') pgTop.removeAttribute('data-hilltop-loaded');
-        if (pgBottom && bottomNet !== 'hilltop') pgBottom.removeAttribute('data-hilltop-loaded');
-        if (topNet !== 'hilltop') {
-          refreshAdSlots(document.querySelectorAll('#pgAdTop'), topNet);
-        }
-        if (bottomNet !== 'hilltop') {
-          refreshAdSlots(document.querySelectorAll('#pgAdBottom'), bottomNet);
-        }
-      } else if (_net !== 'hilltop') {
-        // Hilltop MultiTag banners are single-load scripts: re-injecting the
-        // same zone code repeatedly would stack duplicate loads. Mondiad's
-        // script just re-scans for its own divs, so it gets the
-        // periodic in-place refresh.
-        refreshAdSlots(document.querySelectorAll('#pgAdTop, #pgAdBottom'));
+    if (_pgTurnCount < PAGINATED_AD_REFRESH_EVERY || _pgRefreshPending) return;
+    _pgTurnCount = 0;
+    _pgCycleIndex++;
+    _pgRefreshPending = true;
+    const cycle = _pgCycleIndex;
+    const token = _renderToken;
+    pgWhenCurrentLoaded(function(){
+      _pgRefreshPending = false;
+      if (token !== _renderToken) return;
+      pgRefreshAds(cycle);
+    });
+  }
+
+  function pgRefreshAds(cycle){
+    const _net = activeNetwork();
+    if (rotationEnabled()) {
+      // Top and bottom each get their own network for the new cycle —
+      // may genuinely differ from each other (see networkForCycle).
+      // Hilltop's single-load-per-zone limitation still applies: if
+      // Hilltop happens to own a slot this cycle, that slot simply
+      // doesn't get a fresh reload (same restriction it always had),
+      // while the OTHER slot (if owned by Mondiad/native) still
+      // refreshes normally.
+      const topNet = networkForCycle(cycle, 0);
+      const bottomNet = networkForCycle(cycle, 1);
+      const pgTop = document.getElementById('pgAdTop');
+      const pgBottom = document.getElementById('pgAdBottom');
+      // Hilltop's "never fill twice" guard (data-hilltop-loaded) only
+      // stops the SAME already-filled Hilltop slot being re-requested; it
+      // must not lock a slot out of Hilltop forever after rotation moved
+      // it to another network and back.
+      if (pgTop && topNet !== 'hilltop') pgTop.removeAttribute('data-hilltop-loaded');
+      if (pgBottom && bottomNet !== 'hilltop') pgBottom.removeAttribute('data-hilltop-loaded');
+      if (topNet !== 'hilltop') {
+        refreshAdSlots(document.querySelectorAll('#pgAdTop'), topNet);
       }
+      if (bottomNet !== 'hilltop') {
+        refreshAdSlots(document.querySelectorAll('#pgAdBottom'), bottomNet);
+      }
+    } else if (_net !== 'hilltop') {
+      // Hilltop MultiTag banners are single-load scripts: re-injecting the
+      // same zone code repeatedly would stack duplicate loads. Mondiad
+      // gets a fresh request (queued one at a time by the ad engine).
+      refreshAdSlots(document.querySelectorAll('#pgAdTop, #pgAdBottom'));
     }
   }
 
@@ -1308,16 +1675,24 @@
   }
 
   async function init(){
+    // Start downloading the comic's JSON right away, in parallel with the
+    // site config, instead of waiting for the config first. The skeleton is
+    // already on screen (static HTML), so this is pure time saved.
+    const code = getCodeFromURL();
+    const dataFetch = code
+      ? fetch('data/' + encodeURIComponent(code) + '.json', { cache: 'no-store' }).catch(function(){ return null; })
+      : null;
+
     await loadSiteConfig();
 
-    const code = getCodeFromURL();
     if (!code){
       renderNotAvailable('No comic code was provided in the link.');
       return;
     }
 
     try{
-      const res = await fetch('data/' + encodeURIComponent(code) + '.json', { cache: 'no-store' });
+      const res = await dataFetch;
+      if (!res) throw new Error('fetch failed');
       if (!res.ok){
         renderNotAvailable('This comic isn\'t in our library yet. Check back later.');
         return;
