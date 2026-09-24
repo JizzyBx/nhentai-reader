@@ -29,7 +29,7 @@
       "url": "https://x.com/ArcComicDaily"
     }
   ],
-  "ad_network": "mondiad",
+  "ad_network": "hilltop",
   "multi_network_rotation_enabled": true,
   "network_priority": {
     "mondiad": 1,
