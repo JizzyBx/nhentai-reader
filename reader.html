@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- READER_HTML_VERSION: 24 -->
+<!-- READER_HTML_VERSION: 25 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -518,7 +518,7 @@
   }
 
   // Ad network is chosen from the dashboard (site-config.json ->
-  // ad_network: "mondiad" | "hilltop" | "clickadilla") and pushed through the
+  // ad_network: "mondiad" | "hilltop") and pushed through the
   // same pipeline as branding. Whichever network is NOT active gets zero
   // script tags, zero divs, zero network calls — no leftover/dead
   // fill attempts from the inactive network.
@@ -538,11 +538,19 @@
   // dashboard-selected siteConfig.ad_network — exactly the original
   // single-network behavior, unchanged, for every case rotation doesn't
   // touch.
+  // The dashboard-selected "Active Network". Only two are real choices
+  // (native is rotation-only, ClickAdilla is gone). Anything else — e.g.
+  // a stale "clickadilla" from an old saved config — counts as Mondiad,
+  // so no code path ever carries a network name nothing handles.
+  function activeNetwork(){
+    return (siteConfig && siteConfig.ad_network === 'hilltop') ? 'hilltop' : 'mondiad';
+  }
+
   function injectAdSlots(containers, forceNetwork){
     containers = containers || document.querySelectorAll('.ad-slot-container');
     if (containers.length === 0) return;
 
-    const defaultNetwork = (siteConfig && siteConfig.ad_network) || 'mondiad';
+    const defaultNetwork = activeNetwork();
 
     if (forceNetwork) {
       dispatchToNetwork(forceNetwork, containers);
@@ -563,10 +571,15 @@
   }
 
   function dispatchToNetwork(network, containers){
+    // Only these three names are real. Anything else (e.g. a stale
+    // "clickadilla" left in an old saved config or cached page) is
+    // treated as Mondiad instead of being passed around under a name
+    // nothing handles anymore.
+    if (network !== 'hilltop' && network !== 'native') network = 'mondiad';
     if (network === 'hilltop') {
       injectHilltopSlots(containers);
-    } else if (network === 'clickadilla') {
-      injectClickAdillaSlots(containers);
+    } else if (network === 'native') {
+      injectNativeSlots(containers);
     } else {
       injectMondiadSlots(containers);
     }
@@ -599,19 +612,27 @@
   // selected network once every configured network has had one block.
   //
   // Priority numbers come from site-config.json's "network_priority"
-  // object, e.g. {"mondiad": 3, "hilltop": 2, "clickadilla": 1} — lower
+  // object, e.g. {"mondiad": 3, "hilltop": 2, "native": 1} — lower
   // fills sooner. A network missing from that object, or with a
   // non-numeric value, sorts last (but is still included in rotation).
   function rotationEnabled(){
-    return !!(siteConfig && siteConfig.multi_network_rotation_enabled);
+    // Native's own checkbox also switches the rotation machinery on: the
+    // native ad only ever appears through this block/cycle sequence, so
+    // ticking "Enable Native Ads" must be enough by itself — it must not
+    // silently do nothing unless the general rotation box is ticked too.
+    return !!(siteConfig && (siteConfig.multi_network_rotation_enabled || siteConfig.native_ads_enabled));
   }
 
   // Ordered list of networks for the handoff sequence, AFTER the selected
-  // one. e.g. selected = clickadilla, priorities mondiad:3, hilltop:2
+  // one. e.g. selected = mondiad, priorities hilltop:2, native:1
   // -> returns ['hilltop', 'mondiad'] (hilltop's 2 beats mondiad's 3).
   function rotationHandoffOrder(){
-    const ALL = ['mondiad', 'hilltop', 'clickadilla'];
-    const selected = (siteConfig && siteConfig.ad_network) || 'mondiad';
+    // 'native' only joins the rotation when its dashboard checkbox is on.
+    // When off it is absent from this list entirely, so it can never own
+    // a block and no native.js is ever requested.
+    const ALL = ['mondiad', 'hilltop'];
+    if (siteConfig && siteConfig.native_ads_enabled) ALL.push('native');
+    const selected = activeNetwork();
     const priorities = (siteConfig && siteConfig.network_priority) || {};
     const rest = ALL.filter(function(n){ return n !== selected; });
     rest.sort(function(a, b){
@@ -627,8 +648,8 @@
   // Full block-ownership sequence: the selected network normally gets the
   // first TWO blocks, then every other network gets exactly one block
   // each, in priority order, then the whole sequence repeats. e.g.
-  // selected = clickadilla, priorities mondiad:3 hilltop:2 ->
-  // [clickadilla, clickadilla, hilltop, mondiad], repeating. This (not a
+  // selected = mondiad, priorities hilltop:2 native:1 ->
+  // [mondiad, mondiad, native, hilltop], repeating. This (not a
   // flat 1-each round robin) is Adil's explicit spec — the selected/
   // active network is meant to still dominate, priority only governs who
   // fills in behind it.
@@ -644,10 +665,10 @@
   // to the next-priority network immediately after its one slot rather
   // than holding a second slot it can't actually fill. Every other
   // network is unaffected — they still get their full two blocks when
-  // selected, since Mondiad/ClickAdilla's scripts re-scan for banner
+  // selected, since Mondiad's scripts re-scan for banner
   // divs and don't have this one-zone-per-page restriction.
   function rotationBlockSequence(){
-    const selected = (siteConfig && siteConfig.ad_network) || 'mondiad';
+    const selected = activeNetwork();
     const selectedBlocks = (selected === 'hilltop') ? [selected] : [selected, selected];
     return selectedBlocks.concat(rotationHandoffOrder());
   }
@@ -657,7 +678,7 @@
   // above, cycling once the sequence is exhausted.
   function networkForBlock(blockIndex){
     if (!rotationEnabled()) {
-      return (siteConfig && siteConfig.ad_network) || 'mondiad';
+      return activeNetwork();
     }
     const seq = rotationBlockSequence();
     return seq[blockIndex % seq.length];
@@ -675,7 +696,7 @@
   // networks are in play they never coincide.
   function networkForCycle(cycleIndex, slotOffset){
     if (!rotationEnabled()) {
-      return (siteConfig && siteConfig.ad_network) || 'mondiad';
+      return activeNetwork();
     }
     const seq = rotationBlockSequence();
     return seq[(cycleIndex + slotOffset) % seq.length];
@@ -742,168 +763,45 @@
     });
   }
 
-  // ClickAdilla banners — one global manager script (loaded once, site-wide)
-  // plus a <div data-banner-id="..."> per placement. Unlike Hilltop/ExoClick,
-  // ClickAdilla's script itself scans the page for banner-id divs, so slots
-  // are safe to re-fill in place (same pattern as Mondiad) — no
-  // single-load-per-container guard needed here.
-  // AD Code #465491 ("Comjc page top" — publisher dashboard), 3 spots
-  // (300x100 each), overridable via site-config.json.
-  //   top    -> banner id 1502371
-  //   middle -> banner id 1502372 (the single in-comic slot after page 9,
-  //             reusing Hilltop's "reading" slot type internally)
-  //   bottom -> banner id 1502373
+  // Mondiad NATIVE ads — replaces ClickAdilla's seat in the reading-slot
+  // rotation (ClickAdilla removed entirely: it never paid publishers).
+  // Different script and attribute from Mondiad's banners:
+  //   banner ads -> ss.mrmnd.com/banner.js  + <div data-mndbanid="...">
+  //   native ads -> ss.mrmnd.com/native.js  + <div data-mndazid="...">
+  // Native is NEVER a dashboard "Active Network" choice — it is a
+  // rotation-only network, switched on/off by a checkbox on the dashboard
+  // (site-config.json -> native_ads_enabled). When that checkbox is off,
+  // 'native' is simply absent from the rotation list, so no native
+  // script, div or network call is ever made.
   //
-  // Anti-AdBlock toggle: OFF by default. When ON (site-config.json's
-  // "clickadilla_anti_adblock", dashboard-editable), the normal
-  // <script src="...adManager.js" data-admpid="..."> loader is swapped for
-  // ClickAdilla's own obfuscated Anti-AdBlock loader (copied verbatim from
-  // their dashboard's "Anti AdBlock" panel, admpid 465491 hardcoded inside
-  // it by ClickAdilla's own code generator — not something this file
-  // constructs). Both loaders target the same ad slots/banner-id divs;
-  // only how adManager.js itself gets fetched differs. Adil's call: if
-  // adblock users start seeing "please disable adblock" walls or anything
-  // else that feels off, flip this back off from the dashboard — no code
-  // push needed either way.
-  const CLICKADILLA_ADMPID = '465491';
-  const CLICKADILLA_DEFAULTS = {
-    top:     '1502371',
-    reading: '1502372',
-    bottom:  '1502373'
-  };
+  // native.js may scan the page for its divs only ONCE at load time (the
+  // same trap ClickAdilla's adManager.js fell into, see HANDOFF section
+  // 5g), and this reader creates fresh native divs later (mode switch,
+  // paginated refresh). So every time new native divs are injected, any
+  // previous native.js tag is removed and a fresh one is loaded AFTER the
+  // divs exist — the same fix that solved ClickAdilla's re-render bug.
+  const NATIVE_ZONE_ID = '46474a49-ec2d-4f56-b270-26751ac9202a';
 
-  function clickadillaBannerId(slotType){
-    const t = (slotType === 'reading' || slotType === 'bottom') ? slotType : 'top';
-    const override = siteConfig && siteConfig['clickadilla_' + t + '_banner_id'];
-    return override ? String(override) : CLICKADILLA_DEFAULTS[t];
+  function nativeZoneId(){
+    const override = siteConfig && siteConfig.native_zone_id;
+    return override ? String(override) : NATIVE_ZONE_ID;
   }
 
-  let _clickadillaScriptLoaded = false;
-  function loadClickAdillaBaseScript(){
-    // Remove any previous adManager.js tag before reloading — avoids
-    // stacking duplicate <script> elements in <head> across repeated
-    // mode-switches / paginated-mode refreshes over a long session.
-    document.querySelectorAll('script[data-clickadilla-loader="1"]').forEach(function(old){
-      old.remove();
-    });
-    const admpid = (siteConfig && siteConfig.clickadilla_admpid) || CLICKADILLA_ADMPID;
-    const s = document.createElement('script');
-    s.async = true;
-    s.src = 'https://js.wpadmngr.com/static/adManager.js';
-    s.setAttribute('data-admpid', admpid);
-    s.setAttribute('data-clickadilla-loader', '1');
-    document.head.appendChild(s);
-  }
-
-  // Unlike Mondiad's banner.js, ClickAdilla's adManager.js only scans the
-  // page for data-banner-id divs ONCE, when it first loads — it does not
-  // keep watching for new ones. That's fine for the very first render
-  // (divs exist before the script is added), but breaks on anything that
-  // creates NEW banner divs afterward: switching scroll<->paginated mode,
-  // and paginated mode's periodic ad refresh. Both of those need a script
-  // reload, not just new divs, or the new divs sit empty forever. This
-  // mirrors the same reasoning injectMondiadSlots() uses, just applied
-  // correctly for how ClickAdilla's script actually behaves (confirmed by
-  // Adil reporting empty banners after a mode switch and after paginated
-  // mode's refresh — verified against real behavior, not assumed).
-  function ensureClickAdillaScript(forceReload){
-    if (_clickadillaScriptLoaded && !forceReload) return;
-    _clickadillaScriptLoaded = true;
-
-    if (siteConfig && siteConfig.clickadilla_anti_adblock) {
-      // NOTE: unlike loadClickAdillaBaseScript() above, this doesn't clean
-      // up prior script tags before reloading — it's ClickAdilla's own
-      // generated/obfuscated loader, left untouched rather than risking
-      // breaking it by editing its internals. Repeated reloads (mode
-      // switches, paginated refresh) will each add their own tag; low
-      // real-world impact, but a long single-session paginated read could
-      // accumulate several. Worth asking ClickAdilla support about if it
-      // ever becomes a visible problem.
-      loadClickAdillaAntiAdBlockScript();
-      return;
-    }
-
-    loadClickAdillaBaseScript();
-  }
-
-  // Verbatim from ClickAdilla's dashboard "Anti AdBlock" -> "Add Anti
-  // AdBlock script into your site" panel for AD Code #465491. Deliberately
-  // NOT reformatted/cleaned up — this is copy-pasted as ClickAdilla
-  // generated it, wrapped in a named function instead of running inline,
-  // so it only executes when the toggle above is on.
-  function loadClickAdillaAntiAdBlockScript(){
-    (function(){
-      function R(K,h){var O=X();return R=function(p,E){p=p-0x87;var Z=O[p];return Z;},R(K,h);}
-      (function(K,h){var Xo=R,O=K();while(!![]){try{var p=parseInt(Xo(0xac))/0x1*(-parseInt(Xo(0x90))/0x2)+parseInt(Xo(0xa5))/0x3*(-parseInt(Xo(0x8d))/0x4)+parseInt(Xo(0xb5))/0x5*(-parseInt(Xo(0x93))/0x6)+parseInt(Xo(0x89))/0x7+-parseInt(Xo(0xa1))/0x8+parseInt(Xo(0xa7))/0x9*(parseInt(Xo(0xb2))/0xa)+parseInt(Xo(0x95))/0xb*(parseInt(Xo(0x9f))/0xc);if(p===h)break;else O['push'](O['shift']());}catch(E){O['push'](O['shift']());}}}(X,0x33565));
-      (function(){
-        var XG=R;
-        function K(){
-          var Xe=R,h=465491,O='a3klsam',p='a',E='db',Z=Xe(0xad),S=Xe(0xb6),o=Xe(0xb0),e='cs',D='k',c='pro',u='xy',Q='su',G=Xe(0x9a),j='se',C='cr',z='et',w='sta',Y='tic',g='adMa',V='nager',A=p+E+Z+S+o,s=p+E+Z+S+e,W=p+E+Z+D+'-'+c+u+'-'+Q+G+'-'+j+C+z,L='/'+w+Y+'/'+g+V+Xe(0x9c),T=A,t=s,I=W,N=null,r=null,n=new Date()[Xe(0x94)]()[Xe(0x8c)]('T')[0x0][Xe(0xa3)](/-/ig,'.')['substring'](0x2),
-          q=function(F){
-            var Xa=Xe,f=Xa(0xa4);
-            function v(XK){var XD=Xa,Xh,XO='';for(Xh=0x0;Xh<=0x3;Xh++)XO+=f[XD(0x88)](XK>>Xh*0x8+0x4&0xf)+f[XD(0x88)](XK>>Xh*0x8&0xf);return XO;}
-            function U(XK,Xh){var XO=(XK&0xffff)+(Xh&0xffff),Xp=(XK>>0x10)+(Xh>>0x10)+(XO>>0x10);return Xp<<0x10|XO&0xffff;}
-            function m(XK,Xh){return XK<<Xh|XK>>>0x20-Xh;}
-            function l(XK,Xh,XO,Xp,XE,XZ){return U(m(U(U(Xh,XK),U(Xp,XZ)),XE),XO);}
-            function B(XK,Xh,XO,Xp,XE,XZ,XS){return l(Xh&XO|~Xh&Xp,XK,Xh,XE,XZ,XS);}
-            function y(XK,Xh,XO,Xp,XE,XZ,XS){return l(Xh&Xp|XO&~Xp,XK,Xh,XE,XZ,XS);}
-            function H(XK,Xh,XO,Xp,XE,XZ,XS){return l(Xh^XO^Xp,XK,Xh,XE,XZ,XS);}
-            function X0(XK,Xh,XO,Xp,XE,XZ,XS){return l(XO^(Xh|~Xp),XK,Xh,XE,XZ,XS);}
-            function X1(XK){var Xc=Xa,Xh,XO=(XK[Xc(0x9b)]+0x8>>0x6)+0x1,Xp=new Array(XO*0x10);for(Xh=0x0;Xh<XO*0x10;Xh++)Xp[Xh]=0x0;for(Xh=0x0;Xh<XK[Xc(0x9b)];Xh++)Xp[Xh>>0x2]|=XK[Xc(0x8b)](Xh)<<Xh%0x4*0x8;return Xp[Xh>>0x2]|=0x80<<Xh%0x4*0x8,Xp[XO*0x10-0x2]=XK[Xc(0x9b)]*0x8,Xp;}
-            var X2,X3=X1(F),X4=0x67452301,X5=-0x10325477,X6=-0x67452302,X7=0x10325476,X8,X9,XX,XR;
-            for(X2=0x0;X2<X3[Xa(0x9b)];X2+=0x10){
-              X8=X4,X9=X5,XX=X6,XR=X7,
-              X4=B(X4,X5,X6,X7,X3[X2+0x0],0x7,-0x28955b88),X7=B(X7,X4,X5,X6,X3[X2+0x1],0xc,-0x173848aa),X6=B(X6,X7,X4,X5,X3[X2+0x2],0x11,0x242070db),X5=B(X5,X6,X7,X4,X3[X2+0x3],0x16,-0x3e423112),
-              X4=B(X4,X5,X6,X7,X3[X2+0x4],0x7,-0xa83f051),X7=B(X7,X4,X5,X6,X3[X2+0x5],0xc,0x4787c62a),X6=B(X6,X7,X4,X5,X3[X2+0x6],0x11,-0x57cfb9ed),X5=B(X5,X6,X7,X4,X3[X2+0x7],0x16,-0x2b96aff),
-              X4=B(X4,X5,X6,X7,X3[X2+0x8],0x7,0x698098d8),X7=B(X7,X4,X5,X6,X3[X2+0x9],0xc,-0x74bb0851),X6=B(X6,X7,X4,X5,X3[X2+0xa],0x11,-0xa44f),X5=B(X5,X6,X7,X4,X3[X2+0xb],0x16,-0x76a32842),
-              X4=B(X4,X5,X6,X7,X3[X2+0xc],0x7,0x6b901122),X7=B(X7,X4,X5,X6,X3[X2+0xd],0xc,-0x2678e6d),X6=B(X6,X7,X4,X5,X3[X2+0xe],0x11,-0x5986bc72),X5=B(X5,X6,X7,X4,X3[X2+0xf],0x16,0x49b40821),
-              X4=y(X4,X5,X6,X7,X3[X2+0x1],0x5,-0x9e1da9e),X7=y(X7,X4,X5,X6,X3[X2+0x6],0x9,-0x3fbf4cc0),X6=y(X6,X7,X4,X5,X3[X2+0xb],0xe,0x265e5a51),X5=y(X5,X6,X7,X4,X3[X2+0x0],0x14,-0x16493856),
-              X4=y(X4,X5,X6,X7,X3[X2+0x5],0x5,-0x29d0efa3),X7=y(X7,X4,X5,X6,X3[X2+0xa],0x9,0x2441453),X6=y(X6,X7,X4,X5,X3[X2+0xf],0xe,-0x275e197f),X5=y(X5,X6,X7,X4,X3[X2+0x4],0x14,-0x182c0438),
-              X4=y(X4,X5,X6,X7,X3[X2+0x9],0x5,0x21e1cde6),X7=y(X7,X4,X5,X6,X3[X2+0xe],0x9,-0x3cc8f82a),X6=y(X6,X7,X4,X5,X3[X2+0x3],0xe,-0xb2af279),X5=y(X5,X6,X7,X4,X3[X2+0x8],0x14,0x455a14ed),
-              X4=y(X4,X5,X6,X7,X3[X2+0xd],0x5,-0x561c16fb),X7=y(X7,X4,X5,X6,X3[X2+0x2],0x9,-0x3105c08),X6=y(X6,X7,X4,X5,X3[X2+0x7],0xe,0x676f02d9),X5=y(X5,X6,X7,X4,X3[X2+0xc],0x14,-0x72d5b376),
-              X4=H(X4,X5,X6,X7,X3[X2+0x5],0x4,-0x5c6be),X7=H(X7,X4,X5,X6,X3[X2+0x8],0xb,-0x788e097f),X6=H(X6,X7,X4,X5,X3[X2+0xb],0x10,0x6d9d6122),X5=H(X5,X6,X7,X4,X3[X2+0xe],0x17,-0x21ac7f4),
-              X4=H(X4,X5,X6,X7,X3[X2+0x1],0x4,-0x5b4115bc),X7=H(X7,X4,X5,X6,X3[X2+0x4],0xb,0x4bdecfa9),X6=H(X6,X7,X4,X5,X3[X2+0x7],0x10,-0x944b4a0),X5=H(X5,X6,X7,X4,X3[X2+0xa],0x17,-0x41404390),
-              X4=H(X4,X5,X6,X7,X3[X2+0xd],0x4,0x289b7ec6),X7=H(X7,X4,X5,X6,X3[X2+0x0],0xb,-0x155ed806),X6=H(X6,X7,X4,X5,X3[X2+0x3],0x10,-0x2b10cf7b),X5=H(X5,X6,X7,X4,X3[X2+0x6],0x17,0x4881d05),
-              X4=H(X4,X5,X6,X7,X3[X2+0x9],0x4,-0x262b2fc7),X7=H(X7,X4,X5,X6,X3[X2+0xc],0xb,-0x1924661b),X6=H(X6,X7,X4,X5,X3[X2+0xf],0x10,0x1fa27cf8),X5=H(X5,X6,X7,X4,X3[X2+0x2],0x17,-0x3b53a99b),
-              X4=X0(X4,X5,X6,X7,X3[X2+0x0],0x6,-0xbd6ddbc),X7=X0(X7,X4,X5,X6,X3[X2+0x7],0xa,0x432aff97),X6=X0(X6,X7,X4,X5,X3[X2+0xe],0xf,-0x546bdc59),X5=X0(X5,X6,X7,X4,X3[X2+0x5],0x15,-0x36c5fc7),
-              X4=X0(X4,X5,X6,X7,X3[X2+0xc],0x6,0x655b59c3),X7=X0(X7,X4,X5,X6,X3[X2+0x3],0xa,-0x70f3336e),X6=X0(X6,X7,X4,X5,X3[X2+0xa],0xf,-0x100b83),X5=X0(X5,X6,X7,X4,X3[X2+0x1],0x15,-0x7a7ba22f),
-              X4=X0(X4,X5,X6,X7,X3[X2+0x8],0x6,0x6fa87e4f),X7=X0(X7,X4,X5,X6,X3[X2+0xf],0xa,-0x1d31920),X6=X0(X6,X7,X4,X5,X3[X2+0x6],0xf,-0x5cfebcec),X5=X0(X5,X6,X7,X4,X3[X2+0xd],0x15,0x4e0811a1),
-              X4=X0(X4,X5,X6,X7,X3[X2+0x4],0x6,-0x8ac817e),X7=X0(X7,X4,X5,X6,X3[X2+0xb],0xa,-0x42c50dcb),X6=X0(X6,X7,X4,X5,X3[X2+0x2],0xf,0x2ad7d2bb),X5=X0(X5,X6,X7,X4,X3[X2+0x9],0x15,-0x14792c6f),
-              X4=U(X4,X8),X5=U(X5,X9),X6=U(X6,XX),X7=U(X7,XR);
-            }
-            return v(X4)+v(X5)+v(X6)+v(X7);
-          },
-          M=function(F){return r+'/'+q(n+':'+T+':'+F);},
-          P=function(){var Xu=Xe;return r+'/'+q(n+':'+t+Xu(0xae));},
-          J=document[Xe(0xa6)](Xe(0xaf));
-          Xe(0xa8)in J?(L=L[Xe(0xa3)]('.js',Xe(0x9d)),J[Xe(0x91)]='module'):(L=L[Xe(0xa3)](Xe(0x9c),Xe(0xb4)),J[Xe(0xb3)]=!![]),
-          N=q(n+':'+I+':domain')[Xe(0xa9)](0x0,0xa)+Xe(0x8a),
-          r=Xe(0x92)+q(N+':'+I)[Xe(0xa9)](0x0,0xa)+'.'+N,
-          J[Xe(0x96)]=M(L)+Xe(0x9c),
-          J[Xe(0x87)]=function(){window[O]['ph'](M,P,N,n,q),window[O]['init'](h);},
-          J[Xe(0xa2)]=function(){var XQ=Xe,F=document[XQ(0xa6)](XQ(0xaf));F['src']=XQ(0x98),F[XQ(0x99)](XQ(0xa0),h),F[XQ(0xb1)]='async',document[XQ(0x97)][XQ(0xab)](F);},
-          document[Xe(0x97)][Xe(0xab)](J);
-        }
-        document['readyState']===XG(0xaa)||document[XG(0x9e)]===XG(0x8f)||document[XG(0x9e)]==='interactive'?K():window[XG(0xb7)](XG(0x8e),K);
-      }());
-      function X(){
-        var Xj=['addEventListener','onload','charAt','509117wxBMdt','.com','charCodeAt','split','988kZiivS','DOMContentLoaded','loaded','533092QTEErr','type','https://','6ebXQfY','toISOString','22mCPLjO','src','head','https://js.wpadmngr.com/static/adManager.js','setAttribute','per','length','.js','.m.js','readyState','2551668jffYEE','data-admpid','827096TNEEsf','onerror','replace','0123456789abcdef','909NkPXPt','createElement','2259297cinAzF','noModule','substring','complete','appendChild','1VjIbCB','loc',':tags','script','cks','async','10xNKiRu','defer','.l.js','469955xpTljk','ksu'];
-        X=function(){return Xj;};
-        return X();
-      }
-    }());
-  }
-
-  function injectClickAdillaSlots(containers){
-    // Every call means fresh data-banner-id divs were just created —
-    // force a script reload every time (see ensureClickAdillaScript's
-    // comment above for why this can't just load once).
+  function injectNativeSlots(containers){
     Array.prototype.forEach.call(containers, function(container){
       const div = document.createElement('div');
-      div.setAttribute('data-banner-id', clickadillaBannerId(container.getAttribute('data-ad-slot')));
+      div.setAttribute('data-mndazid', nativeZoneId());
       container.appendChild(div);
     });
-    ensureClickAdillaScript(true);
+
+    document.querySelectorAll('script[data-native-loader="1"]').forEach(function(old){
+      old.parentNode && old.parentNode.removeChild(old);
+    });
+    const s = document.createElement('script');
+    s.async = true;
+    s.src = 'https://ss.mrmnd.com/native.js';
+    s.setAttribute('data-native-loader', '1');
+    document.head.appendChild(s);
   }
 
   function getCodeFromURL(){
@@ -1133,10 +1031,10 @@
     // fewer slots, never more than the cap. Never places a slot on the
     // very last page — that's the dedicated "bottom" slot's job.
     // Hilltop's MultiTag scripts are single-load-per-zone, so it's stuck
-    // with exactly one reading slot. ClickAdilla has no such per-zone reuse
+    // with exactly one reading slot. Mondiad/native have no such per-zone reuse
     // restriction (same as Mondiad — its script just re-scans for banner
     // divs), so it also gets the every-9-pages cadence, just capped higher.
-    const _net = siteConfig && siteConfig.ad_network;
+    const _net = activeNetwork();
     const _rotation = rotationEnabled();
 
     // Reading-slot pages -> which network owns that block. Without
@@ -1147,7 +1045,7 @@
     // DIFFERENT network per networkForBlock(), and Hilltop's structural
     // one-slot-only limit applies only to the block(s) where Hilltop is
     // the block owner, not to the comic as a whole — a later block owned
-    // by Mondiad/ClickAdilla is unaffected by Hilltop having already used
+    // by Mondiad/native is unaffected by Hilltop having already used
     // its one slot earlier.
     const readingSlotPages = new Map(); // pageNum -> network for that slot
     if (_rotation) {
@@ -1315,14 +1213,14 @@
     if (_pgTurnCount >= PAGINATED_AD_REFRESH_EVERY){
       _pgTurnCount = 0;
       _pgCycleIndex++;
-      const _net = siteConfig && siteConfig.ad_network;
+      const _net = activeNetwork();
       if (rotationEnabled()) {
         // Top and bottom each get their own network for the new cycle —
         // may genuinely differ from each other (see networkForCycle).
         // Hilltop's single-load-per-zone limitation still applies: if
         // Hilltop happens to own a slot this cycle, that slot simply
         // doesn't get a fresh reload (same restriction it always had),
-        // while the OTHER slot (if owned by Mondiad/ClickAdilla) still
+        // while the OTHER slot (if owned by Mondiad/native) still
         // refreshes normally.
         const topNet = networkForCycle(_pgCycleIndex, 0);
         const bottomNet = networkForCycle(_pgCycleIndex, 1);
@@ -1345,8 +1243,8 @@
         }
       } else if (_net !== 'hilltop') {
         // Hilltop MultiTag banners are single-load scripts: re-injecting the
-        // same zone code repeatedly would stack duplicate loads. Mondiad and
-        // ClickAdilla both just re-scan for their own divs, so they get the
+        // same zone code repeatedly would stack duplicate loads. Mondiad's
+        // script just re-scans for its own divs, so it gets the
         // periodic in-place refresh.
         refreshAdSlots(document.querySelectorAll('#pgAdTop, #pgAdBottom'));
       }
