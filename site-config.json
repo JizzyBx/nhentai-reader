@@ -33,10 +33,9 @@
   "multi_network_rotation_enabled": true,
   "network_priority": {
     "mondiad": 1,
-    "hilltop": 3,
-    "clickadilla": 2
+    "hilltop": 3
   },
-  "clickadilla_anti_adblock": true,
+  "native_ads_enabled": true,
   "paginated_mode_enabled": true,
   "smartlink_enabled": false,
   "smartlink_url": "",
