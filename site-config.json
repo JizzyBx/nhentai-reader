@@ -27,6 +27,12 @@
       "name": "Arc Comic",
       "desc": "Join our X  for doujinshi Comics, Manga and updates",
       "url": "https://x.com/ArcComicDaily"
+    },
+    {
+      "platform": "telegram",
+      "name": "GMAX Trading Bot Live",
+      "desc": "Watch Live Performance for months Then Decide",
+      "url": "https://t.me/+7wZMEQEFy7FmYmJl"
     }
   ],
   "ad_network": "hilltop",
